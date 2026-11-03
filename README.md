@@ -35,7 +35,7 @@ outgoing mail. Forwards do not carry the original attachments.
 Install a tagged release with Cargo:
 
 ```sh
-cargo install --locked --git https://github.com/zydtiger/mailctl --tag v0.1.0
+cargo install --locked --git https://github.com/zydtiger/mailctl --tag v0.1.1
 ```
 
 Or, from a checkout:
