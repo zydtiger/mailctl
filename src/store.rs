@@ -352,7 +352,7 @@ fn mail_dir() -> Result<PathBuf> {
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => bail!(
             "cannot read {}: mailctl ({}) needs Full Disk Access; run `mailctl permissions`",
             base.display(),
-            std::env::current_exe()
+            crate::permissions::binary()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|_| "this binary".into())
         ),

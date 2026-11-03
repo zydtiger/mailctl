@@ -9,7 +9,7 @@
 use crate::output::{Output, PermissionReport, PermissionStatus};
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ const GRANT_TIMEOUT: Duration = Duration::from_secs(300);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn run(check: bool) -> Result<Output> {
-    let binary = std::env::current_exe().context("cannot locate the mailctl binary")?;
+    let binary = binary()?;
     let (full_disk_access, automation) = if check {
         (full_disk_access(), automation_status()?)
     } else {
@@ -34,6 +34,14 @@ pub fn run(check: bool) -> Result<Output> {
         full_disk_access,
         automation,
     }))
+}
+
+/// The file macOS checks permissions against. `current_exe` returns the path
+/// mailctl was started through, which may be a symlink such as a profile
+/// link; macOS records grants for the file it resolves to.
+pub fn binary() -> Result<PathBuf> {
+    let path = std::env::current_exe().context("cannot locate the mailctl binary")?;
+    Ok(path.canonicalize().unwrap_or(path))
 }
 
 fn full_disk_access() -> PermissionStatus {
