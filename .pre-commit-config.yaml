@@ -1,0 +1,58 @@
+minimum_prek_version: "0.4.14"
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+default_stages: [pre-commit]
+
+repos:
+  - repo: builtin
+    hooks:
+      - id: check-added-large-files
+      - id: check-executables-have-shebangs
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+        # Rust inner attributes (`#![allow(...)]`) look like shebangs to this hook.
+        exclude: '\.rs$'
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: require-pattern
+        name: commit message prefix
+        stages: [commit-msg]
+        args: ['^(Merge |(feat|fix|docs|test|refactor|perf|build|ci|chore)(\([a-z0-9-]+\))?: [a-z])']
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        args: [-shellcheck=, -pyflakes=]
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --
+        language: system
+        types: [rust]
+      - id: node-check
+        name: node --check
+        # Syntax check for the embedded JXA bridge. node --check only
+        # inspects its first path argument, so loop over the batch.
+        entry: bash -c 'for f in "$@"; do node --check "$f" || exit 1; done' --
+        language: system
+        types_or: [javascript]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --locked -- -D warnings
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --locked
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

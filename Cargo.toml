@@ -1,0 +1,23 @@
+[package]
+name = "mailctl"
+version = "0.1.0"
+edition = "2024"
+description = "A macOS Apple Mail CLI that reads the local Mail store and acts through Mail.app scripting"
+license = "MIT"
+readme = "README.md"
+keywords = ["mail", "email", "macos", "cli", "applescript"]
+categories = ["command-line-utilities", "email"]
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+mail-parser = "1"
+percent-encoding = "2"
+rusqlite = { version = "0.41", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
