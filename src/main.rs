@@ -1,9 +1,14 @@
+#[cfg(target_os = "macos")]
+embed_plist::embed_info_plist!("../Info.plist");
+
 mod catalog;
 mod cli;
 mod commands;
 mod dates;
 mod emlx;
 mod output;
+mod permissions;
+mod responsibility;
 mod scripting;
 mod store;
 mod version;
@@ -15,6 +20,10 @@ use std::io::Write;
 use std::process::ExitCode;
 
 fn main() -> Result<ExitCode> {
+    if let Some(code) = responsibility::reexec_disclaimed() {
+        return Ok(code);
+    }
+
     let Cli { json, command } = Cli::parse();
     if let Command::Completions { shell } = command {
         cli::print_completions(shell);

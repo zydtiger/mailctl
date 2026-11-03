@@ -25,6 +25,15 @@ pub enum Command {
     /// Print a shell completion script.
     Completions { shell: Shell },
 
+    /// Check Full Disk Access and Automation for Mail, and request what is
+    /// missing.
+    Permissions {
+        /// Report the current state without opening System Settings or
+        /// prompting.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// List Mail accounts and their special mailboxes.
     Accounts {
         /// Re-read accounts from Mail.app instead of the cache.

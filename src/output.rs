@@ -5,6 +5,7 @@ use crate::catalog::{Account, Mailbox};
 use crate::version::VersionInfo;
 use serde::Serialize;
 use std::io::Write;
+use std::path::PathBuf;
 
 pub enum Output {
     Version(VersionInfo),
@@ -15,6 +16,7 @@ pub enum Output {
     Raw(Vec<u8>),
     Actions(ActionReport),
     Composed(ComposeReport),
+    Permissions(PermissionReport),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,12 +111,48 @@ pub struct ComposeReport {
     pub sent: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PermissionReport {
+    pub binary: PathBuf,
+    pub full_disk_access: PermissionStatus,
+    /// Permission to control Mail.
+    pub automation: PermissionStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionStatus {
+    Granted,
+    Denied,
+    NotDetermined,
+    /// macOS reports Automation only while Mail is running.
+    Unknown,
+}
+
+impl PermissionStatus {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::Denied => "denied",
+            Self::NotDetermined => "not determined",
+            Self::Unknown => "unknown (Mail is not running)",
+        }
+    }
+}
+
 impl Output {
     pub fn failed(&self) -> bool {
-        matches!(self, Self::Actions(report) if report
-            .results
-            .iter()
-            .any(|result| result.status == ActionStatus::Failed))
+        match self {
+            Self::Actions(report) => report
+                .results
+                .iter()
+                .any(|result| result.status == ActionStatus::Failed),
+            Self::Permissions(report) => {
+                report.full_disk_access != PermissionStatus::Granted
+                    || report.automation != PermissionStatus::Granted
+            }
+            _ => false,
+        }
     }
 
     pub fn write_json(&self, out: &mut impl Write) -> serde_json::Result<()> {
@@ -130,6 +168,7 @@ impl Output {
             ),
             Self::Actions(value) => serde_json::to_writer(&mut *out, value),
             Self::Composed(value) => serde_json::to_writer(&mut *out, value),
+            Self::Permissions(value) => serde_json::to_writer(&mut *out, value),
         }
     }
 
@@ -151,6 +190,11 @@ impl Output {
                     report.to.join(", "),
                     report.sender
                 )
+            }
+            Self::Permissions(report) => {
+                writeln!(out, "mailctl:          {}", report.binary.display())?;
+                writeln!(out, "Full Disk Access: {}", report.full_disk_access.name())?;
+                writeln!(out, "Automation:       {}", report.automation.name())
             }
         }
     }

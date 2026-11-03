@@ -15,6 +15,8 @@ fetch.
 | `src/scripting.rs` | Runs `src/jxa/mail.js` through `osascript` |
 | `src/jxa/mail.js` | The Mail.app bridge: one JSON request in, one JSON response out |
 | `src/output.rs` | Result types; JSON and human rendering |
+| `src/responsibility.rs` | Re-executes mailctl as its own TCC responsible process |
+| `src/permissions.rs` | Checks and requests Full Disk Access and Automation |
 
 ## Mail Store
 
@@ -71,5 +73,22 @@ message, and an XML property list.
   invisible compose, which Mail discards when it quits.
 - Mail's drafts store an empty `text/plain` part beside the HTML body, so
   `show` converts the HTML when the text part is blank.
-- Apple Events are attributed to the app that launched mailctl, which is the
-  app the Automation permission names.
+- `osascript` inherits mailctl's TCC responsibility (see below), so the
+  Automation permission names mailctl.
+
+## Permissions
+
+`src/responsibility.rs` re-executes mailctl through `posix_spawn` with
+`responsibility_spawnattrs_setdisclaim`, a private libSystem call resolved at
+run time. The child is its own responsible process, so Full Disk Access and
+Automation are checked against mailctl rather than the app that launched it,
+including helper apps that agent hosts run commands through. The parent only
+waits and passes on the exit status. When the symbol is missing, mailctl runs
+in-process under the launching app's permissions. `Info.plist` is embedded in
+the binary's `__TEXT,__info_plist` section to give mailctl a bundle identifier
+and the Automation usage string.
+
+`mailctl permissions` checks Full Disk Access by listing `~/Library/Mail` in a
+child process, so a grant made while it waits is seen. It checks Automation
+with `AEDeterminePermissionToAutomateTarget`, which answers only while Mail
+is running and shows the consent dialog when asked to.

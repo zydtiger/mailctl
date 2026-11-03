@@ -28,7 +28,7 @@ outgoing mail. Forwards do not carry the original attachments.
 
 - macOS on Apple Silicon, with Mail.app signed in to the accounts you want
 - Rust toolchain for local builds (`rust-toolchain.toml` pins the version)
-- Full Disk Access and Automation permissions for the app that runs mailctl
+- Full Disk Access and Automation permissions for the mailctl binary
 
 ## Install
 
@@ -47,16 +47,31 @@ mailctl version
 
 ## Permissions
 
-mailctl runs with the permissions of the app that launches it, such as your
-terminal.
+mailctl re-executes itself with TCC responsibility disclaimed, so macOS
+checks permissions for mailctl itself rather than for the terminal, editor, or
+agent app that launched it. Grant them once and mailctl works from any of
+those.
 
-1. Grant that app **Full Disk Access** in System Settings > Privacy & Security
-   > Full Disk Access, then restart it. Reads need this to open
-   `~/Library/Mail`.
-2. Run `mailctl accounts --refresh`. macOS asks whether the app may control
-   Mail; allow it. Writes and account discovery need this **Automation**
-   permission. To change it later, use System Settings > Privacy & Security >
-   Automation.
+Reads need **Full Disk Access** to open `~/Library/Mail`. Writes, drafts,
+and account discovery need **Automation** permission to control Mail. Run:
+
+```sh
+mailctl permissions
+```
+
+1. Without Full Disk Access, it opens System Settings > Privacy & Security >
+   Full Disk Access and reveals the mailctl binary in Finder. Drag the binary
+   into the list and turn it on; macOS has no prompt for this permission.
+2. It then starts Mail if needed and asks for Automation permission. Allow
+   mailctl to control Mail in the dialog. If you refused before, it opens the
+   Automation pane instead.
+
+It waits for each grant and prints both states. `mailctl permissions --check`
+only reports them.
+
+The grants follow the binary's code signature. An ad-hoc signed rebuild is a
+new binary to macOS: run `mailctl permissions` again, and remove the old Full
+Disk Access entry.
 
 ## Usage
 

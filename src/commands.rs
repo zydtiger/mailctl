@@ -5,7 +5,7 @@ use crate::output::{
     MessageDetail, MessageView, Output,
 };
 use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store};
-use crate::{dates, emlx, scripting, version};
+use crate::{dates, emlx, permissions, scripting, version};
 use anyhow::{Context, Result};
 use chrono::Local;
 use mail_parser::{MessageParser, html_to_text};
@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 pub fn run(command: Command) -> Result<Output> {
     let command = match command {
         Command::Version => return Ok(Output::Version(version::info())),
+        Command::Permissions { check } => return permissions::run(check),
         // Composing needs neither the store nor the account catalog.
         Command::Draft {
             to,
@@ -44,7 +45,10 @@ pub fn run(command: Command) -> Result<Output> {
     let session = Session { store, catalog };
 
     match command {
-        Command::Version | Command::Completions { .. } | Command::Draft { .. } => {
+        Command::Version
+        | Command::Completions { .. }
+        | Command::Permissions { .. }
+        | Command::Draft { .. } => {
             unreachable!("handled earlier")
         }
         Command::Accounts { .. } => Ok(Output::Accounts(session.catalog.accounts.clone())),

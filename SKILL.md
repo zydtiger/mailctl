@@ -58,20 +58,24 @@ mailctl version --json
 
 ## Permissions
 
-The app that runs mailctl (a terminal or an agent host) needs two macOS
-permissions:
+macOS checks permissions for the mailctl binary itself, not for the terminal
+or agent host that runs it. It needs two:
 
 - **Full Disk Access**, to read `~/Library/Mail`. Without it, reads fail with
-  a message that names the setting. The user grants it in System Settings >
-  Privacy & Security > Full Disk Access. You cannot grant it yourself.
+  a message that names the binary's path and `mailctl permissions`. macOS
+  shows no prompt for it; only the user can add it in System Settings.
 - **Automation for Mail**, for writes and for reading account names. macOS
-  asks the first time. If it was denied, the error names System Settings > Privacy &
-  Security > Automation.
+  asks the first time mailctl controls Mail. Without it, writes fail with a
+  message that names `mailctl permissions`.
 
-Some agent hosts launch commands through a helper app, and macOS then checks
-that helper rather than the host. When reads fail with a Full Disk Access
-error even though the user has granted access to the host, run mailctl from a
-terminal that has the permission.
+Both grants follow the binary's code signature, so a rebuilt mailctl needs
+them again. Granting Full Disk Access to the terminal does not help.
+
+Check both with `mailctl permissions --check --json`, which changes nothing
+and exits nonzero unless both are `granted`. `automation` is `unknown` while
+Mail is not running. When a permission is missing, ask the user to run
+`mailctl permissions` in a terminal: it opens the right System Settings pane,
+shows the Automation dialog, and waits for the user to act.
 
 mailctl caches Mail's account list in `~/Library/Caches/mailctl/accounts.json`
 and refreshes it from Mail.app when the store names an unknown account. Run

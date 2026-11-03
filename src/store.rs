@@ -350,9 +350,11 @@ fn mail_dir() -> Result<PathBuf> {
     let entries = match std::fs::read_dir(&base) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => bail!(
-            "cannot read {}: grant Full Disk Access to the app running mailctl in \
-             System Settings > Privacy & Security > Full Disk Access",
-            base.display()
+            "cannot read {}: mailctl ({}) needs Full Disk Access; run `mailctl permissions`",
+            base.display(),
+            std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "this binary".into())
         ),
         Err(error) => {
             return Err(error).with_context(|| format!("cannot read {}", base.display()));

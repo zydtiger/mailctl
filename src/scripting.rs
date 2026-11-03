@@ -1,8 +1,7 @@
 //! Runs the embedded JXA bridge through `osascript`.
 //!
-//! macOS attributes the Apple Events to the app that launched mailctl, so
-//! that app (a terminal or an agent host) is what the Automation prompt for
-//! Mail names.
+//! `osascript` inherits mailctl's TCC responsibility, so the Automation
+//! prompt for Mail names mailctl rather than the app that launched it.
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -49,7 +48,7 @@ pub fn call<T: DeserializeOwned>(request: &Value) -> Result<T> {
 
 fn permission_hint(message: &str) -> &'static str {
     if message.contains("-1743") || message.contains("Not authorized") {
-        "\nAllow the app running mailctl to control Mail in System Settings > Privacy & Security > Automation."
+        "\nmailctl needs Automation permission for Mail; run `mailctl permissions`."
     } else {
         ""
     }

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>mailctl</string>
+	<key>CFBundleExecutable</key>
+	<string>mailctl</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.zydtiger.mailctl</string>
+	<key>CFBundleName</key>
+	<string>mailctl</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>mailctl controls Mail to mark, flag, move, and trash messages and to save or send drafts.</string>
+</dict>
+</plist>
