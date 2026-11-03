@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A macOS Apple Mail CLI that reads the local Mail store and acts through Mail.app scripting"
 license = "MIT"
+repository = "https://github.com/zydtiger/mailctl"
 readme = "README.md"
 keywords = ["mail", "email", "macos", "cli", "applescript"]
 categories = ["command-line-utilities", "email"]

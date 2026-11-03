@@ -31,3 +31,20 @@ pub fn info() -> VersionInfo {
         profile: env!("MAILCTL_BUILD_PROFILE"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    const INFO_PLIST: &str = include_str!("../Info.plist");
+
+    #[test]
+    fn info_plist_version_matches_cargo() {
+        for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+            let value = INFO_PLIST
+                .split_once(&format!("<key>{key}</key>"))
+                .and_then(|(_, rest)| rest.split_once("<string>"))
+                .and_then(|(_, rest)| rest.split_once("</string>"))
+                .map(|(value, _)| value);
+            assert_eq!(value, Some(env!("CARGO_PKG_VERSION")), "{key}");
+        }
+    }
+}

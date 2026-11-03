@@ -55,7 +55,32 @@ period, and an optional scope only when it clarifies the subject:
 
 ## Releases
 
-Do not bump the version without explicit user approval. Use Semantic
-Versioning: patch for compatible fixes, minor for new functionality or
-breaking changes while pre-1.0. Tag approved releases as `v<version>` with an
-annotated tag, and ask for approval immediately before pushing the tag.
+The public surfaces are the command-line interface (commands, flags, and exit
+codes) and the `--json` output. Do not bump the version on every commit or
+without explicit user approval. Use Semantic Versioning: patch for compatible
+fixes, minor for new functionality or breaking changes while pre-1.0, and
+major for breaking changes after 1.0. When a coherent, tested, documented set
+of changes is substantial enough to release, suggest the version and rationale
+to the user.
+
+`Cargo.toml` is the version source. A release-preparation commit changes its
+version, the matching `CFBundleShortVersionString` and `CFBundleVersion` in
+`Info.plist` (a test checks they agree), and `Cargo.lock` after `cargo build`.
+
+Publishing a release is one action. Ask for explicit approval once, immediately
+before pushing the release tag, presenting the exact version, the commit it will
+point at, and the rationale for that number. That approval covers publishing the
+GitHub Release from that tag. Ask again only for a different version or commit,
+or to modify or delete a release that already exists. Approval to edit, commit,
+or push ordinary commits is not release approval.
+
+Create a matching annotated Git tag for every approved release using
+`v<version>`, for example `v0.1.0`, and always push that tag explicitly to
+`origin` after creating it. The GitHub Release, titled with the tag, holds the
+release notes: user-visible changes grouped as added, changed, fixed, and
+breaking.
+
+Never move or replace an existing release tag. A repository ruleset named
+`protect-release-tags` enforces this on the remote for `refs/tags/v*`, denying
+tag deletion, non-fast-forward updates, and updates, with no bypass. A rejected
+tag push is that rule working, not a broken remote.

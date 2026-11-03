@@ -437,7 +437,7 @@ mod tests {
             (14, 'imap://GMAIL/INBOX', 1, 0, 13);
         INSERT INTO subjects VALUES (1, 'Lease extension'), (2, '50% off today'), (3, 'Weekly digest');
         INSERT INTO addresses VALUES (1, 'landlord@example.com', 'Michelle Miller'),
-            (2, 'deals@shop.example', 'Shop'), (3, 'me@example.edu', 'Tiger Ding');
+            (2, 'deals@shop.example', 'Shop'), (3, 'me@example.edu', 'Me');
         INSERT INTO summaries VALUES (1, 'The unit 1415 lease runs through May');
         INSERT INTO message_global_data VALUES (1, '<lease@example.com>'), (2, '<deal@shop>'), (3, '<digest@x>');
         INSERT INTO messages VALUES

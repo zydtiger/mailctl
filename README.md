@@ -32,13 +32,19 @@ outgoing mail. Forwards do not carry the original attachments.
 
 ## Install
 
-From the project root:
+Install a tagged release with Cargo:
 
 ```sh
-cargo install --path .
+cargo install --locked --git https://github.com/zydtiger/mailctl --tag v0.1.0
 ```
 
-This installs the release build to Cargo's bin directory, usually
+Or, from a checkout:
+
+```sh
+cargo install --locked --path .
+```
+
+Either installs the release build to Cargo's bin directory, usually
 `~/.cargo/bin/mailctl`. Verify the installed build:
 
 ```sh
