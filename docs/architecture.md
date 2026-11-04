@@ -59,7 +59,10 @@ message, and an XML property list.
 - `whose` queries take seconds on large mailboxes, so mailctl looks messages
   up by id within a known mailbox and confirms moves by polling the store for
   the Message-ID instead. Copies that existed before the move are excluded, so
-  a pre-existing duplicate is not reported as the moved message. A source in
+  a pre-existing duplicate is not reported as the moved message. Copies that
+  share a Message-ID and move together, such as the Sent and Inbox copies of
+  a message to oneself, each get their own destination copy, preferring the
+  one with the same received date, which a move keeps. A source in
   Gmail All Mail is never expected to empty, since All Mail keeps labelled
   messages.
 - Moving a Gmail message to All Mail, or setting its `mailbox` to All Mail,

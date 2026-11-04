@@ -4,7 +4,7 @@ use crate::output::{
     ActionReport, ActionResult, ActionStatus, AddressView, AttachmentView, ComposeReport,
     MessageDetail, MessageView, Output,
 };
-use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store};
+use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store, StoredCopy};
 use crate::{dates, emlx, permissions, scripting, version};
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -305,7 +305,7 @@ impl Session {
                         .store
                         .copies(message_id)?
                         .into_iter()
-                        .map(|(id, _)| id)
+                        .map(|copy| copy.id)
                         .collect();
                 }
             }
@@ -480,12 +480,19 @@ impl Session {
                     Some("the message has no Message-ID, so the move cannot be checked".into());
             }
         }
+        // Copies of one message, such as the Sent and Inbox copies of a
+        // message to oneself, share a Message-ID; each destination copy goes
+        // to one result.
+        let mut claimed = Vec::new();
         loop {
             let mut unsettled = Vec::new();
             for position in pending {
-                let (in_destination, in_source) = self.whereabouts(&steps[position])?;
+                let (in_destination, in_source) = self.whereabouts(&steps[position], &claimed)?;
                 match (in_destination, in_source) {
-                    (Some(id), false) => results[position].new_id = Some(id),
+                    (Some(id), false) => {
+                        results[position].new_id = Some(id);
+                        claimed.push(id);
+                    }
                     _ => unsettled.push(position),
                 }
             }
@@ -496,7 +503,8 @@ impl Session {
             std::thread::sleep(Duration::from_millis(300));
         }
         for position in pending {
-            let (in_destination, in_source) = self.whereabouts(&steps[position])?;
+            let (in_destination, in_source) = self.whereabouts(&steps[position], &claimed)?;
+            claimed.extend(in_destination);
             let result = &mut results[position];
             if in_source {
                 result.status = ActionStatus::Failed;
@@ -517,27 +525,31 @@ impl Session {
         Ok(())
     }
 
-    /// The id of the copy in the step's destination, and whether a copy
-    /// remains in its source.
-    fn whereabouts(&self, step: &Step) -> Result<(Option<i64>, bool)> {
+    /// The id of the copy in the step's destination, outside `claimed`, and
+    /// whether a copy remains in its source. A move keeps the received date,
+    /// so a destination copy with the message's date is preferred.
+    fn whereabouts(&self, step: &Step, claimed: &[i64]) -> Result<(Option<i64>, bool)> {
         let message_id = step.record.message_id.as_deref().unwrap_or_default();
         let copies = self.store.copies(message_id)?;
         let in_destination = step.destination.and_then(|destination| {
-            copies
+            let candidates: Vec<&StoredCopy> = copies
                 .iter()
-                .find(|(id, mailboxes)| {
-                    mailboxes.contains(&destination) && !step.prior.contains(id)
+                .filter(|copy| {
+                    copy.mailboxes.contains(&destination)
+                        && !step.prior.contains(&copy.id)
+                        && !claimed.contains(&copy.id)
                 })
-                .map(|(id, _)| *id)
+                .collect();
+            candidates
+                .iter()
+                .find(|copy| copy.date_received == step.record.date_received)
+                .or(candidates.first())
+                .map(|copy| copy.id)
         });
         let in_source = step
             .source
             .filter(|source| !self.catalog.is_all_mail(*source))
-            .is_some_and(|source| {
-                copies
-                    .iter()
-                    .any(|(_, mailboxes)| mailboxes.contains(&source))
-            });
+            .is_some_and(|source| copies.iter().any(|copy| copy.mailboxes.contains(&source)));
         Ok((in_destination, in_source))
     }
 
@@ -936,22 +948,27 @@ mod tests {
     /// An Exchange account with Drafts (7) and Sent Items (8). Draft 200 has
     /// an autosaved copy 201 without recipients; Sent Items holds an older
     /// send 202, the new send 203, and 204 to someone else. Gmail draft 205
-    /// is stored in All Mail (13) with the Drafts label (15).
+    /// is stored in All Mail (13) with the Drafts label (15). 212 and 213 are
+    /// the Sent and Inbox copies of a message to oneself, moved to Deleted
+    /// Items (9).
     const SEND_FIXTURE: &str = "
         INSERT INTO mailboxes VALUES (7, 'ews://EWS/Drafts', 2, 0, NULL),
+            (9, 'ews://EWS/Deleted%20Items', 2, 0, NULL),
             (8, 'ews://EWS/Sent%20Items', 3, 0, NULL),
             (15, 'imap://GMAIL/%5BGmail%5D/Drafts', 1, 0, 13),
             (16, 'imap://GMAIL/%5BGmail%5D/Sent%20Mail', 0, 0, 13);
         INSERT INTO subjects VALUES (4, 'Agenda');
         INSERT INTO message_global_data VALUES (4, '<a@x>'), (5, '<b@x>'), (6, '<c@x>'),
-            (7, '<d@x>'), (8, '<e@x>'), (9, '<f@x>');
+            (7, '<d@x>'), (8, '<e@x>'), (9, '<f@x>'), (10, '<self@x>');
         INSERT INTO messages VALUES
             (200, 4, 3, NULL, 4, NULL, 5000, 5000, 7, 0, 1, 0, 0, 10, 20),
             (201, 5, 3, NULL, 4, NULL, 4999, 4999, 7, 0, 1, 0, 0, 10, 21),
             (202, 6, 3, NULL, 4, NULL, 1000, 1000, 8, 0, 1, 0, 0, 10, 22),
             (203, 7, 3, NULL, 4, NULL, 6000, 6010, 8, 0, 1, 0, 0, 10, 20),
             (204, 8, 3, NULL, 4, NULL, 6000, 6005, 8, 0, 1, 0, 0, 10, 23),
-            (205, 9, 3, NULL, 4, NULL, 5000, 5000, 13, 0, 1, 0, 0, 10, 24);
+            (205, 9, 3, NULL, 4, NULL, 5000, 5000, 13, 0, 1, 0, 0, 10, 24),
+            (212, 10, 3, NULL, 3, NULL, 7000, 7000, 9, 0, 1, 0, 0, 10, 25),
+            (213, 10, 3, NULL, 3, NULL, 7000, 7003, 9, 0, 1, 0, 0, 10, 25);
         INSERT INTO labels VALUES (205, 15);
         INSERT INTO recipients VALUES (10, 200, 1, 0, 0), (11, 202, 1, 0, 0),
             (12, 203, 1, 0, 0), (13, 204, 2, 0, 0), (14, 205, 1, 0, 0);
@@ -1003,6 +1020,37 @@ mod tests {
             status: ActionStatus::Failed,
             error: None,
         }
+    }
+
+    #[test]
+    fn confirms_each_moved_copy_once() {
+        let (_root, session) = session();
+        let moved = session.message(212).unwrap();
+        // The Inbox copy (received 7003) comes first, as `copies` lists 212 first.
+        let step = |source, date_received| Step {
+            record: MessageRecord {
+                id: source * 100,
+                mailbox: source,
+                date_received,
+                ..moved.clone()
+            },
+            source: Some(source),
+            destination: Some(9),
+            outcome: Ok(()),
+            prior: Vec::new(),
+        };
+        let steps = [step(6, 7003), step(8, 7000)];
+        let mut results: Vec<ActionResult> = steps
+            .iter()
+            .map(|step| ActionResult {
+                status: ActionStatus::Done,
+                id: step.record.id,
+                ..pending(&session)
+            })
+            .collect();
+        session.confirm_moves(&steps, &mut results).unwrap();
+        assert_eq!(results[0].new_id, Some(213));
+        assert_eq!(results[1].new_id, Some(212));
     }
 
     #[test]

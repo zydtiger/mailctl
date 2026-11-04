@@ -52,6 +52,15 @@ pub struct MessageRecord {
     pub attachments: Vec<String>,
 }
 
+/// One stored copy of a message, from [`Store::copies`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCopy {
+    pub id: i64,
+    /// Mailboxes the copy is stored in or labelled with.
+    pub mailboxes: Vec<i64>,
+    pub date_received: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct MessageQuery {
     /// Restrict to messages stored in or labelled with these mailboxes.
@@ -226,20 +235,25 @@ impl Store {
             .collect()
     }
 
-    /// Every stored copy of a message, by its Message-ID header, with the
-    /// mailboxes it is stored in or labelled with.
-    pub fn copies(&self, message_id: &str) -> Result<Vec<(i64, Vec<i64>)>> {
+    /// Every stored copy of a message, by its Message-ID header, oldest row
+    /// first.
+    pub fn copies(&self, message_id: &str) -> Result<Vec<StoredCopy>> {
         let mut statement = self.conn.prepare(
-            "SELECT m.ROWID, m.mailbox, (SELECT group_concat(mailbox_id) FROM labels WHERE message_id = m.ROWID) \
+            "SELECT m.ROWID, m.mailbox, (SELECT group_concat(mailbox_id) FROM labels WHERE message_id = m.ROWID), \
+             COALESCE(m.date_received, 0) \
              FROM messages m JOIN message_global_data g ON g.ROWID = m.global_message_id \
-             WHERE g.message_id_header = ?1 AND m.deleted = 0",
+             WHERE g.message_id_header = ?1 AND m.deleted = 0 ORDER BY m.ROWID",
         )?;
         let rows = statement.query_map([message_id], |row| {
             let mut mailboxes = vec![row.get::<_, i64>(1)?];
             if let Some(labels) = row.get::<_, Option<String>>(2)? {
                 mailboxes.extend(labels.split(',').filter_map(|id| id.parse::<i64>().ok()));
             }
-            Ok((row.get(0)?, mailboxes))
+            Ok(StoredCopy {
+                id: row.get(0)?,
+                mailboxes,
+                date_received: row.get(3)?,
+            })
         })?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
@@ -630,14 +644,19 @@ pub(crate) mod tests {
     #[test]
     fn finds_copies_by_message_id() {
         let (_root, store) = fixture();
+        let copy = |id, mailboxes, date_received| StoredCopy {
+            id,
+            mailboxes,
+            date_received,
+        };
         assert_eq!(
             store.copies("<deal@shop>").unwrap(),
-            vec![(101, vec![13, 14])]
+            vec![copy(101, vec![13, 14], 2001)]
         );
         // The deleted copy in the lease thread is ignored.
         assert_eq!(
             store.copies("<lease@example.com>").unwrap(),
-            vec![(100, vec![6])]
+            vec![copy(100, vec![6], 1001)]
         );
         assert!(store.copies("<missing@x>").unwrap().is_empty());
     }
