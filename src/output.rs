@@ -77,6 +77,10 @@ pub struct ActionReport {
     pub action: String,
     pub dry_run: bool,
     pub results: Vec<ActionResult>,
+    /// `send` only: ids of drafts with the sent draft's subject that remain
+    /// in its Drafts mailbox, such as copies Mail autosaved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leftovers: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -373,6 +377,10 @@ fn write_actions(out: &mut impl Write, report: &ActionReport) -> std::io::Result
             None => writeln!(out)?,
         }
     }
+    if let Some(leftovers) = report.leftovers.as_ref().filter(|ids| !ids.is_empty()) {
+        let ids: Vec<String> = leftovers.iter().map(i64::to_string).collect();
+        writeln!(out, "Drafts with the same subject: {}", ids.join(" "))?;
+    }
     Ok(())
 }
 
@@ -395,6 +403,22 @@ fn truncate(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_leftover_drafts() {
+        let report = ActionReport {
+            action: "send".into(),
+            dry_run: false,
+            results: Vec::new(),
+            leftovers: Some(vec![76298, 76299]),
+        };
+        let mut out = Vec::new();
+        write_actions(&mut out, &report).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Drafts with the same subject: 76298 76299\n"
+        );
+    }
 
     #[test]
     fn truncates_by_characters() {

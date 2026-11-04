@@ -129,6 +129,15 @@ pub enum Command {
         send: bool,
     },
 
+    /// Send a draft from a Drafts mailbox exactly as it is saved.
+    Send {
+        /// Draft id from `list --mailbox drafts`.
+        id: i64,
+        /// Print the draft and its Sent mailbox without sending.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Reply to a message and save the reply as a draft, or send it with --send.
     Reply {
         id: i64,

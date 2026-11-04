@@ -71,6 +71,23 @@ message, and an XML property list.
   `reply` or `forward`, so the bridge writes the quoted original itself.
   `save()` stores a draft; `close` and `delete` do not reliably dismiss the
   invisible compose, which Mail discards when it quits.
+- `send` accepts only an outgoing message, and a saved draft is a plain
+  message. Mail keeps every compose created through scripting, sent or not,
+  in `outgoing messages` until it quits. Opening a draft whose compose Mail
+  still holds creates no new compose; it only re-saves the draft under a new
+  id. `mailctl send` therefore first looks for a held compose with the
+  draft's subject, sender address, To and Cc addresses, and text (ignoring
+  surrounding whitespace), and sends it when exactly one matches. Sending
+  that compose filed the message in Sent Items within about three seconds and
+  removed the draft, with no autosaved copies. Without a held compose,
+  `send` opens the draft, as a double-click does, and sends the new compose;
+  that path has not been checked against a live send.
+- Every draft save, including Mail's autosaves, stores a new message with a
+  new Message-ID, and the sent copy gets another. `send` therefore confirms by
+  subject and To and Cc addresses among Sent messages that were not there
+  before, and reports other Drafts messages with the same subject as
+  leftovers. Exchange has taken up to about ten seconds to file a sent
+  message in Sent Items.
 - Mail's drafts store an empty `text/plain` part beside the HTML body, so
   `show` converts the HTML when the text part is blank.
 - `osascript` inherits mailctl's TCC responsibility (see below), so the

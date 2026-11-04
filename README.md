@@ -20,6 +20,7 @@ JSON.
 - moving messages, archiving them (except Gmail), and moving them to trash,
   with dry-run planning and per-message results
 - saving new messages, replies, and forwards as drafts, or sending them
+- sending a saved draft exactly as it is, after review in Mail
 
 It does not search full message bodies, save attachments, or attach files to
 outgoing mail. Forwards do not carry the original attachments.
@@ -92,6 +93,7 @@ mailctl flag 76037 --color blue
 mailctl move 76037 --to archive --dry-run
 mailctl trash 76037
 mailctl draft --to a@example.com --subject "Agenda" --body "Draft text"
+mailctl send 76140 --dry-run
 mailctl reply 76037 --body "Thanks, Friday works."
 ```
 

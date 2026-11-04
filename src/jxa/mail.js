@@ -67,6 +67,42 @@ const handlers = {
     return finish(message, request.send);
   },
 
+  // Mail sends only outgoing messages. Mail keeps the compose of a draft it
+  // created or opened until it quits, and opening such a draft creates no new
+  // compose, so a held compose that matches the draft is sent. Otherwise the
+  // draft is opened, the way double-clicking it in Mail does, and the new
+  // compose is sent. `refused` means Mail was not asked to send; after `send`
+  // is called, the reply never claims that nothing went out.
+  send(Mail, request) {
+    let message;
+    try {
+      const draft = messageRef(Mail, request.target);
+      const subject = draft.subject(); // Fails here when the draft is gone.
+      const held = heldComposes(Mail, draft);
+      if (held.length > 1) {
+        throw new Error("Mail holds several composes that match the draft; quit and reopen Mail, then try again");
+      }
+      if (held.length === 1) {
+        message = held[0];
+      } else {
+        const before = Mail.outgoingMessages.id();
+        Mail.open(draft);
+        message = openedCompose(Mail, before, subject);
+      }
+      // Closing the compose could discard the saved draft, so it stays open.
+      if (message.toRecipients().length + message.ccRecipients().length === 0) {
+        throw new Error("the draft has no To or Cc recipients");
+      }
+    } catch (error) {
+      return { refused: String(error) };
+    }
+    try {
+      return { sent: Boolean(message.send()) };
+    } catch (error) {
+      return { sent: false, error: String(error) };
+    }
+  },
+
   // Without a compose window Mail leaves reply and forward bodies empty, so
   // the quoted original is written here as plain text.
   reply(Mail, request) {
@@ -163,6 +199,45 @@ function addRecipients(Mail, message, request) {
       message[collection].push(Mail[constructor]({ address }));
     }
   }
+}
+
+// Outgoing messages with the draft's subject, sender, To and Cc addresses,
+// and text, ignoring surrounding whitespace.
+function heldComposes(Mail, draft) {
+  const address = (text) => Mail.extractAddressFrom(text).toLowerCase();
+  const addresses = (message) =>
+    message
+      .toRecipients()
+      .concat(message.ccRecipients())
+      .map((recipient) => recipient.address().toLowerCase())
+      .sort()
+      .join(",");
+  const subject = draft.subject();
+  const sender = address(draft.sender());
+  const recipients = addresses(draft);
+  const text = draft.content().trim();
+  return Mail.outgoingMessages().filter(
+    (message) =>
+      message.subject() === subject &&
+      address(message.sender()) === sender &&
+      addresses(message) === recipients &&
+      message.content().trim() === text,
+  );
+}
+
+// The compose Mail opened for a draft: the one outgoing message that is new
+// since `before` and has the draft's subject.
+function openedCompose(Mail, before, subject) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const opened = Mail.outgoingMessages().filter(
+      (message) => !before.includes(message.id()) && message.subject() === subject,
+    );
+    if (opened.length === 1) return opened[0];
+    delay(0.1);
+  }
+  throw new Error(
+    "Mail did not open the draft as an outgoing message; close any window showing the draft in Mail and try again",
+  );
 }
 
 function join(body, quoted) {

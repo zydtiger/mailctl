@@ -1,6 +1,6 @@
 ---
 name: mailctl
-description: Use when reading or managing email in macOS Apple Mail with the mailctl CLI, including listing and searching messages across accounts, reading message bodies and threads, marking read or flagged, moving, archiving, or trashing messages, and drafting, replying to, or forwarding mail. Covers accounts that sign in with OAuth, since mailctl works through Mail.app rather than mail server credentials.
+description: Use when reading or managing email in macOS Apple Mail with the mailctl CLI, including listing and searching messages across accounts, reading message bodies and threads, marking read or flagged, moving, archiving, or trashing messages, and drafting, replying to, forwarding, or sending saved drafts. Covers accounts that sign in with OAuth, since mailctl works through Mail.app rather than mail server credentials.
 ---
 
 # mailctl
@@ -16,7 +16,8 @@ use OAuth. It never handles passwords or tokens.
   account appears, asks Mail.app for account names, which launches Mail if it
   is not running.
 - Writes (`read`, `unread`, `flag`, `unflag`, `move`, `archive`, `trash`,
-  `draft`, `reply`, `forward`) run JavaScript for Automation against Mail.app.
+  `draft`, `reply`, `forward`, `send`) run JavaScript for Automation against
+  Mail.app.
   Mail.app syncs each change to the server.
 
 Check the installed build before relying on a flag:
@@ -38,10 +39,12 @@ mailctl version --json
 - `read`, `unread`, `flag`, and `unflag` are easy to reverse. Run them without
   extra confirmation when the user asked for exactly that change on messages
   they identified.
-- Never pass `--send` to `draft`, `reply`, or `forward` unless the user has
-  approved the final recipients, subject, and body text in this conversation.
-  Without `--send`, the message is saved to the account's Drafts mailbox,
-  where the user can review it in Mail.
+- Never pass `--send` to `draft`, `reply`, or `forward`, or run `mailctl
+  send`, unless the user has approved the final recipients, subject, and body
+  text in this conversation. Without `--send`, the message is saved to the
+  account's Drafts mailbox, where the user can review it in Mail. Once the
+  user approves a saved draft, send it with `mailctl send <id>` rather than
+  composing it again with `--send`.
 - Message ids are Mail's internal row ids. They change whenever Mail moves a
   message, including moves into trash. Use the `new_id` field from a move
   result, or rerun `list` or `search`, before acting on that message again.
@@ -219,6 +222,57 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
 - `--send` sends immediately. Follow the operating rule above. If a send
   reports that Mail did not confirm it, check the Sent mailbox before trying
   again; never resend blindly.
+
+## Sending Drafts
+
+```sh
+mailctl list --mailbox drafts --json        # find the draft id
+mailctl show 76136 --json                   # show the user what will be sent
+mailctl send 76136 --dry-run --json
+mailctl send 76136 --json
+```
+
+`send` sends the message saved in a Drafts mailbox itself, rather than a
+recomposed copy, so edits the user made in Mail go out as saved. Mail opens
+the draft in a compose window for a moment, sends it, and removes the draft.
+The draft needs a To or Cc recipient; Bcc-only drafts are refused. If the
+user has the draft open in Mail with unsaved changes, ask them to save or
+close that window first. Mail keeps every compose mailctl created until it
+quits; when several match the draft, `send` fails and asks for Mail to be
+quit and reopened, which keeps saved drafts.
+
+It reports one result in the same form as other writes, with the draft's
+Drafts mailbox as `from_mailbox` and the account's Sent mailbox as
+`to_mailbox`:
+
+- `done`: the store shows the sent copy in the Sent mailbox under `new_id`.
+- `planned`: a `--dry-run` result.
+- `unconfirmed`: Mail was asked to send, but no sent copy appeared within
+  about 30 seconds, or the request to Mail failed partway; `error` says which
+  and whether Mail reported the send. Check the Sent mailbox and Outbox before
+  doing anything else, and never send again blindly.
+- `failed`: Mail was not asked to send, so nothing went out. The id is not in
+  a Drafts mailbox, the draft has no To or Cc recipient, several composes in
+  Mail match it, or Mail could not open it; `error` says which.
+
+An id that does not exist is an error on stderr, as for other commands.
+
+`leftovers` lists the ids of drafts with the same subject that remain in the
+Drafts mailbox: for a dry run, the other drafts; after a `done` send, copies
+Mail autosaved, or the draft itself if Mail has not removed it within a few
+seconds. It is absent for `unconfirmed` and `failed` results, when the draft
+may still be the only copy. Mail's sent copy and each autosaved copy carry
+new Message-IDs, so these are matched by subject alone and can include
+unrelated drafts that share it. Show the user the leftovers with `mailctl
+show`, and trash them with `mailctl trash` only after the user confirms they
+are copies of the sent message.
+
+```json
+{"action":"send","dry_run":false,"results":[{"id":76136,"new_id":76301,
+ "subject":"…","from_mailbox":"work@example.edu/Drafts",
+ "to_mailbox":"work@example.edu/Sent Items","status":"done","error":null}],
+ "leftovers":[76298]}
+```
 
 ## JSON Output
 

@@ -408,7 +408,7 @@ fn like(text: &str) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The subset of the Envelope Index schema mailctl reads.
@@ -451,12 +451,16 @@ mod tests {
     ";
 
     fn fixture() -> (tempfile::TempDir, Store) {
+        fixture_with("")
+    }
+
+    /// The test store plus `extra` SQL run after the schema.
+    pub(crate) fn fixture_with(extra: &str) -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("MailData")).unwrap();
-        Connection::open(root.path().join("MailData/Envelope Index"))
-            .unwrap()
-            .execute_batch(SCHEMA)
-            .unwrap();
+        let conn = Connection::open(root.path().join("MailData/Envelope Index")).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(extra).unwrap();
         let store = Store::open_at(root.path()).unwrap();
         (root, store)
     }
