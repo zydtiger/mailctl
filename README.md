@@ -19,7 +19,8 @@ JSON.
 - marking messages read or unread, and flagging them with a color
 - moving messages, archiving them (except Gmail), and moving them to trash,
   with dry-run planning and per-message results
-- saving new messages, replies, and forwards as drafts, or sending them
+- saving new messages, replies, and forwards as drafts, reporting the saved
+  draft's id and any extra copies Mail stored, or sending them
 - sending a saved draft exactly as it is, after review in Mail
 - creating, rescheduling, and cancelling meetings through Microsoft Outlook,
   which sends the invitations from the calendar's own account
@@ -63,8 +64,9 @@ checks permissions for mailctl itself rather than for the terminal, editor, or
 agent app that launched it. Grant them once and mailctl works from any of
 those.
 
-Reads need **Full Disk Access** to open `~/Library/Mail`. Writes, drafts,
-and account discovery need **Automation** permission to control Mail. Run:
+Reads need **Full Disk Access** to open `~/Library/Mail`, and so does the
+saved draft's id in a draft result. Writes, drafts, and account discovery
+need **Automation** permission to control Mail. Run:
 
 ```sh
 mailctl permissions

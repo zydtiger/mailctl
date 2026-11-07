@@ -131,7 +131,8 @@ pub enum Command {
 
     /// Send a draft from a Drafts mailbox exactly as it is saved.
     Send {
-        /// Draft id from `list --mailbox drafts`.
+        /// Draft id from the `draft`, `reply`, or `forward` result, or from
+        /// `list --mailbox drafts`.
         id: i64,
         /// Print the draft and its Sent mailbox without sending.
         #[arg(long)]
