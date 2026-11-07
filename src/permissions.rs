@@ -1,6 +1,6 @@
 //! Checks and requests the two macOS permissions mailctl needs: Full Disk
 //! Access for reading the Mail store, and Automation for controlling Mail.
-//! It also reports Accessibility, which only `meeting` needs to drive Outlook.
+//! It also reports Accessibility, which only `meeting` and `send --at` need.
 //!
 //! macOS has no prompt for Full Disk Access, so the request opens its
 //! System Settings pane and reveals this binary in Finder for the user to
