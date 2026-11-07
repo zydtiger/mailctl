@@ -47,13 +47,14 @@ fn accessibility() -> PermissionStatus {
 }
 
 /// Fails with instructions unless mailctl may use the Accessibility API, which
-/// `meeting` uses to drive Outlook. macOS has no prompt that grants it.
-pub fn require_accessibility() -> Result<()> {
+/// `meeting` uses to drive Outlook and `send --at` to drive Mail's Send Later.
+/// macOS has no prompt that grants it.
+pub fn require_accessibility(app: &str) -> Result<()> {
     if accessibility() == PermissionStatus::Granted {
         return Ok(());
     }
     bail!(
-        "mailctl needs Accessibility permission to drive Outlook: add {} under \
+        "mailctl needs Accessibility permission to drive {app}: add {} under \
          System Settings > Privacy & Security > Accessibility and turn it on",
         binary()?.display()
     )

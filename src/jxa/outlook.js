@@ -1,33 +1,23 @@
 // Microsoft Outlook bridge for `mailctl meeting`. Takes one JSON request in
-// argv[0] and returns one JSON response, like mail.js.
+// argv[0] and returns one JSON response, like mail.js. ax.js is prepended.
 //
 // The new Outlook for Mac has no scripting dictionary, so this drives its
-// windows through the Accessibility API (ApplicationServices through the ObjC
-// bridge). Keys go to Outlook's process only (CGEventPostToPid), never to the
-// frontmost app. Outlook ignores its Send, Save, and Discard buttons unless it
-// is the active app, so `submit` brings it to the front for that press and
-// then gives the front back. docs/architecture.md records the behavior this
-// relies on.
-
-ObjC.import("ApplicationServices");
-ObjC.import("AppKit");
-ObjC.import("CoreGraphics");
+// windows through the Accessibility API. Keys go to Outlook's process only,
+// never to the frontmost app. Outlook ignores its Send, Save, and Discard
+// buttons unless it is the active app, so `submit` presses them in front.
+// docs/architecture.md records the behavior this relies on.
 
 const BUNDLE = "com.microsoft.Outlook";
 const EVENT_WINDOW = " • Calendar • ";
 const ATTENDEES = ["Add required people", "Required Attendees"];
 const LOCATION = ["Add a location", "Locations"];
 const KEY = { a: 0, tab: 48, delete: 51, escape: 53, return: 36 };
-const TRUE = $.NSNumber.numberWithBool(true);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function run(argv) {
   const request = JSON.parse(argv[0]);
   try {
-    if (!$.AXIsProcessTrusted()) {
-      throw new Error("mailctl needs Accessibility permission to drive Outlook");
-    }
-    return JSON.stringify({ ok: true, value: handlers[request.op](outlook(), request) });
+    return JSON.stringify({ ok: true, value: handlers[request.op](axApp(BUNDLE, "Outlook"), request) });
   } catch (error) {
     return JSON.stringify({ ok: false, error: message(error) });
   }
@@ -98,107 +88,8 @@ const handlers = {
   },
 };
 
-function outlook() {
-  const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(BUNDLE);
-  if (apps.count === 0) throw new Error("Microsoft Outlook is not running; open it and try again");
-  const pid = apps.objectAtIndex(0).processIdentifier;
-  const app = $.AXUIElementCreateApplication(pid);
-  $.AXUIElementSetMessagingTimeout(app, 5);
-  return { pid, app };
-}
-
-// --- Accessibility helpers ---------------------------------------------------
-
-function get(el, name) {
-  const ref = Ref();
-  return $.AXUIElementCopyAttributeValue(el, $(name), ref) === 0 ? ObjC.castRefToObject(ref[0]) : null;
-}
-
-function text(el, name) {
-  const value = get(el, name);
-  return value === null ? "" : value.description.js;
-}
-
-function array(value) {
-  const out = [];
-  for (let i = 0; value !== null && i < value.count; i++) out.push(value.objectAtIndex(i));
-  return out;
-}
-
-function children(el) {
-  return array(get(el, "AXChildren"));
-}
-
-function role(el) {
-  return text(el, "AXRole");
-}
-
-// Outlook labels controls with AXDescription, a few with AXTitle or a
-// placeholder.
-function labelOf(el) {
-  return text(el, "AXDescription") || text(el, "AXTitle") || text(el, "AXPlaceholderValue");
-}
-
-function set(el, name, value) {
-  const error = $.AXUIElementSetAttributeValue(el, $(name), value);
-  if (error !== 0) throw new Error(`Outlook refused to set ${name} (AXError ${error})`);
-}
-
-// Some Outlook buttons act but still return an error, so callers check the
-// effect instead of this result.
-function press(el) {
-  return $.AXUIElementPerformAction(el, $("AXPress"));
-}
-
-function findAll(root, test, depth = 12) {
-  const hits = [];
-  const walk = (el, level) => {
-    for (const child of children(el)) {
-      if (test(child)) hits.push(child);
-      if (level < depth) walk(child, level + 1);
-    }
-  };
-  walk(root, 0);
-  return hits;
-}
-
-function find(root, test, depth = 12) {
-  let hit = null;
-  const walk = (el, level) => {
-    for (const child of children(el)) {
-      if (hit) return;
-      if (test(child)) hit = child;
-      else if (level < depth) walk(child, level + 1);
-    }
-  };
-  walk(root, 0);
-  return hit;
-}
-
-function key(o, code, flags = 0) {
-  for (const down of [true, false]) {
-    const event = $.CGEventCreateKeyboardEvent($(), code, down);
-    if (flags) $.CGEventSetFlags(event, flags);
-    $.CGEventPostToPid(o.pid, event);
-    delay(0.05);
-  }
-}
-
-function waitFor(test, seconds, failure) {
-  for (let elapsed = 0; elapsed <= seconds; elapsed += 0.25) {
-    const value = test();
-    if (value) return value;
-    delay(0.25);
-  }
-  throw new Error(failure);
-}
-
 function expect(condition, failure) {
   if (!condition) throw new Error("Outlook did not take the change: " + failure);
-}
-
-function message(error) {
-  return error && error.message ? error.message : String(error);
 }
 
 function leftOpenOnError(what, body) {
@@ -209,15 +100,7 @@ function leftOpenOnError(what, body) {
   }
 }
 
-// --- Outlook windows and menus -----------------------------------------------
-
-function windows(o) {
-  return array(get(o.app, "AXWindows"));
-}
-
-function isOpen(o, win) {
-  return windows(o).some((other) => other.isEqual(win));
-}
+// --- Outlook windows ---------------------------------------------------------
 
 function openWindow(o, action, what) {
   const before = windows(o);
@@ -227,23 +110,6 @@ function openWindow(o, action, what) {
     10,
     `Outlook did not open ${what}`,
   );
-}
-
-function menu(o, path) {
-  let item = get(o.app, "AXMenuBar");
-  for (const name of path) {
-    const items = children(item).flatMap((child) => (role(child) === "AXMenu" ? children(child) : [child]));
-    item = items.find((child) => text(child, "AXTitle") === name);
-    if (!item) throw new Error(`Outlook has no ${path.join(" > ")} menu item`);
-  }
-  if (text(item, "AXEnabled") !== "1") throw new Error(`Outlook's ${path.join(" > ")} menu item is unavailable`);
-  press(item);
-}
-
-function button(win, label, required = true) {
-  const hit = find(win, (el) => role(el) === "AXButton" && labelOf(el).replace(/, pressed$/, "") === label);
-  if (!hit && required) throw new Error(`Outlook shows no ${label} button`);
-  return hit;
 }
 
 function field(win, labels) {
@@ -467,11 +333,7 @@ function outlookTime(seconds) {
 // prompt is answered only when no location was requested. Any other prompt
 // is reported and left for the user.
 function submit(o, win, label, confirmNoLocation) {
-  const previous = frontmostPid();
-  try {
-    set(o.app, "AXFrontmost", TRUE);
-    $.AXUIElementPerformAction(win, $("AXRaise"));
-    waitFor(() => text(o.app, "AXFrontmost") === "1", 3, "Outlook did not come to the front");
+  return inFront(o, win, () => {
     press(button(win, label));
     for (let elapsed = 0; elapsed < 20; elapsed += 0.25) {
       delay(0.25);
@@ -485,16 +347,5 @@ function submit(o, win, label, confirmNoLocation) {
       confirmNoLocation = false;
     }
     return { sent: false, prompt: "Outlook did not close the meeting window; check Outlook before trying again" };
-  } finally {
-    if (previous !== null && previous !== o.pid) {
-      $.AXUIElementSetAttributeValue($.AXUIElementCreateApplication(previous), $("AXFrontmost"), TRUE);
-    }
-  }
-}
-
-function frontmostPid() {
-  const app = get($.AXUIElementCreateSystemWide(), "AXFocusedApplication");
-  if (app === null) return null;
-  const pid = Ref();
-  return $.AXUIElementGetPid(app, pid) === 0 ? pid[0] : null;
+  });
 }

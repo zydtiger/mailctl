@@ -18,7 +18,7 @@ pub fn run(action: MeetingAction) -> Result<Output> {
     let result = if plan.dry_run && plan.op == "create" {
         BridgeResult::default()
     } else {
-        permissions::require_accessibility()?;
+        permissions::require_accessibility("Outlook")?;
         let op = if plan.dry_run { "find" } else { plan.op };
         scripting::outlook(&plan.request(op))?
     };

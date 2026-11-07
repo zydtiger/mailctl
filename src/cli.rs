@@ -129,11 +129,16 @@ pub enum Command {
         send: bool,
     },
 
-    /// Send a draft from a Drafts mailbox exactly as it is saved.
+    /// Send a draft from a Drafts mailbox exactly as it is saved, now or at a
+    /// later time with Mail's Send Later.
     Send {
         /// Draft id from the `draft`, `reply`, or `forward` result, or from
         /// `list --mailbox drafts`.
         id: i64,
+        /// Schedule the send: local `YYYY-MM-DDTHH:MM` or RFC 3339, in the
+        /// future. This Mac must be on and online at that time.
+        #[arg(long)]
+        at: Option<String>,
         /// Print the draft and its Sent mailbox without sending.
         #[arg(long)]
         dry_run: bool,

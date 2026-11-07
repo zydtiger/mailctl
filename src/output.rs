@@ -82,6 +82,9 @@ pub struct ActionReport {
     /// in its Drafts mailbox, such as copies Mail autosaved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leftovers: Option<Vec<i64>>,
+    /// `schedule` only: the time Mail's Send Later sends it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -467,6 +470,9 @@ fn write_actions(out: &mut impl Write, report: &ActionReport) -> std::io::Result
             None => writeln!(out)?,
         }
     }
+    if let Some(at) = &report.at {
+        writeln!(out, "Scheduled for: {at}")?;
+    }
     if let Some(leftovers) = report.leftovers.as_ref().filter(|ids| !ids.is_empty()) {
         let ids: Vec<String> = leftovers.iter().map(i64::to_string).collect();
         writeln!(out, "Drafts with the same subject: {}", ids.join(" "))?;
@@ -536,6 +542,7 @@ mod tests {
             dry_run: false,
             results: Vec::new(),
             leftovers: Some(vec![76298, 76299]),
+            at: None,
         };
         let mut out = Vec::new();
         write_actions(&mut out, &report).unwrap();

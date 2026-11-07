@@ -67,7 +67,13 @@ pub fn run(command: Command) -> Result<Output> {
         }
         Command::Archive(targets) => session.act(Action::Archive, &targets),
         Command::Trash(targets) => session.act(Action::Trash, &targets),
-        Command::Send { id, dry_run } => session.send(id, dry_run),
+        Command::Send { id, at, dry_run } => {
+            let at = at
+                .as_deref()
+                .map(|text| schedule_time(text, Local::now().timestamp()))
+                .transpose()?;
+            session.send(id, at, dry_run)
+        }
         Command::Reply {
             id,
             all,
@@ -383,6 +389,7 @@ impl Session {
             dry_run: targets.dry_run,
             results,
             leftovers: None,
+            at: None,
         }))
     }
 
@@ -553,8 +560,11 @@ impl Session {
         Ok((in_destination, in_source))
     }
 
-    fn send(&self, id: i64, dry_run: bool) -> Result<Output> {
+    /// Sends a draft now, or with `at` schedules it with Mail's Send Later,
+    /// which files it in On My Mac/SendLater until then.
+    fn send(&self, id: i64, at: Option<i64>, dry_run: bool) -> Result<Output> {
         let record = self.message(id)?;
+        let action = if at.is_some() { "schedule" } else { "send" };
         let mut result = ActionResult {
             id,
             new_id: None,
@@ -566,13 +576,18 @@ impl Session {
         };
         let report = |result, leftovers| {
             Ok(Output::Actions(ActionReport {
-                action: "send".into(),
+                action: action.into(),
                 dry_run,
                 results: vec![result],
                 leftovers,
+                at: at.and_then(dates::rfc3339),
             }))
         };
-        let (drafts, sent) = match self.plan_send(&record) {
+        let plan = self.plan_send(&record).and_then(|(drafts, sent)| match at {
+            Some(_) => self.send_later_mailbox().map(|later| (drafts, later)),
+            None => Ok((drafts, sent)),
+        });
+        let (drafts, sent) = match plan {
             Ok(plan) => plan,
             Err(reason) => {
                 result.error = Some(reason);
@@ -589,18 +604,27 @@ impl Session {
         }
 
         // Mail gives the sent copy a new Message-ID, so it is found by
-        // subject and recipients among messages filed from now on.
-        let since = Local::now().timestamp() - 5;
+        // subject and recipients among messages filed from now on. A
+        // scheduled copy may keep the draft's date, so any new one counts.
+        let since = match at {
+            Some(_) => 0,
+            None => Local::now().timestamp() - 5,
+        };
         let check = SentCheck {
             draft: &record,
             drafts,
             sent,
             since,
             prior: self.sent_like(&record, sent, since, &[])?,
+            scheduled: at.is_some(),
         };
+        if at.is_some() {
+            permissions::require_accessibility("Mail")?;
+        }
         let reply: Result<SendResult> = scripting::call(&json!({
-            "op": "send",
+            "op": if at.is_some() { "schedule" } else { "send" },
             "target": self.location(&record)?,
+            "at": at,
         }));
         if let Ok(SendResult {
             refused: Some(reason),
@@ -653,18 +677,23 @@ impl Session {
         }
         let sent_label = result.to_mailbox.clone().unwrap_or_else(|| "Sent".into());
         result.status = ActionStatus::Unconfirmed;
+        let (action, done) = if check.scheduled {
+            ("schedule", "scheduled")
+        } else {
+            ("send", "sent")
+        };
         result.error = Some(match reply {
             Ok(SendResult { sent: true, .. }) => format!(
-                "Mail sent the draft, but it has not appeared in {sent_label} yet; check there before sending again"
+                "Mail {done} the draft, but it has not appeared in {sent_label} yet; check there before trying again"
             ),
             Ok(SendResult { error, .. }) => {
                 let reason = error.map(|error| format!(" ({error})")).unwrap_or_default();
                 format!(
-                    "Mail did not confirm the send{reason}; check Outbox and {sent_label} before trying again"
+                    "Mail did not confirm the {action}{reason}; check Outbox and {sent_label} before trying again"
                 )
             }
             Err(error) => format!(
-                "the send request failed after it reached Mail ({error:#}); check Outbox and {sent_label} before trying again"
+                "the {action} request failed after it reached Mail ({error:#}); check Outbox and {sent_label} before trying again"
             ),
         });
         None
@@ -907,6 +936,20 @@ impl Session {
         Some(format!("{}/{}", mailbox.owner(), mailbox.path))
     }
 
+    /// The On My Mac mailbox where Mail keeps messages scheduled with Send Later.
+    fn send_later_mailbox(&self) -> Result<i64, String> {
+        self.catalog
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.account_id.is_none() && mailbox.path == SEND_LATER_PATH)
+            .map(|mailbox| mailbox.id)
+            .ok_or_else(|| {
+                "Mail has no On My Mac/SendLater mailbox to confirm a schedule in; \
+                 schedule one message with Send Later in Mail once to create it"
+                    .into()
+            })
+    }
+
     fn view(&self, record: &MessageRecord) -> MessageView {
         let mailbox = self.catalog.mailbox(record.mailbox);
         MessageView {
@@ -983,6 +1026,21 @@ struct SentCheck<'a> {
     since: i64,
     /// Matching Sent messages that were already there.
     prior: Vec<i64>,
+    /// `sent` is On My Mac/SendLater: the draft was scheduled, not sent.
+    scheduled: bool,
+}
+
+/// Mail's Send Later mailbox, `On My Mac/SendLater`.
+const SEND_LATER_PATH: &str = "SendLater";
+
+/// Parses `send --at`; Mail's Send Later needs a time ahead of now.
+fn schedule_time(text: &str, now: i64) -> Result<i64> {
+    let at = dates::parse_datetime(text)?;
+    anyhow::ensure!(
+        at >= now + 60,
+        "`--at {text}` is not at least a minute ahead; send it now without --at"
+    );
+    Ok(at)
 }
 
 /// How long `send` waits for the store to show the sent copy. Exchange took
@@ -1453,9 +1511,48 @@ mod tests {
     }
 
     #[test]
+    fn schedule_plans_into_send_later() {
+        let (_root, session) = session();
+        let Output::Actions(report) = session.send(200, Some(9000), true).unwrap() else {
+            panic!("send returns an action report");
+        };
+        assert_eq!(report.action, "schedule");
+        assert_eq!(report.results[0].status, ActionStatus::Failed);
+        assert!(
+            report.results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("SendLater")
+        );
+
+        let (_root, session) = session_with(
+            "INSERT INTO mailboxes VALUES (30, 'local://LOCAL/SendLater', 0, 0, NULL);",
+        );
+        let Output::Actions(report) = session.send(200, Some(9000), true).unwrap() else {
+            panic!("send returns an action report");
+        };
+        let [result] = report.results.try_into().unwrap();
+        assert_eq!(result.status, ActionStatus::Planned);
+        assert_eq!(result.to_mailbox.as_deref(), Some("On My Mac/SendLater"));
+        assert_eq!(report.at, dates::rfc3339(9000));
+    }
+
+    #[test]
+    fn schedule_time_must_be_ahead() {
+        let now = dates::parse_datetime("2026-11-20T15:00:00-05:00").unwrap();
+        assert!(schedule_time("2026-11-20T15:00:00-05:00", now).is_err());
+        assert!(schedule_time("2026-11-20T15:00:30-05:00", now).is_err());
+        assert_eq!(
+            schedule_time("2026-11-20T15:01:00-05:00", now).unwrap(),
+            now + 60
+        );
+    }
+
+    #[test]
     fn send_dry_run_reports_other_drafts() {
         let (_root, session) = session();
-        let Output::Actions(report) = session.send(200, true).unwrap() else {
+        let Output::Actions(report) = session.send(200, None, true).unwrap() else {
             panic!("send returns an action report");
         };
         assert_eq!(report.leftovers, Some(vec![201]));
@@ -1470,7 +1567,7 @@ mod tests {
             Some("work@example.edu/Sent Items")
         );
 
-        let Output::Actions(report) = session.send(100, true).unwrap() else {
+        let Output::Actions(report) = session.send(100, None, true).unwrap() else {
             panic!("send returns an action report");
         };
         assert_eq!(report.results[0].status, ActionStatus::Failed);
@@ -1487,6 +1584,7 @@ mod tests {
             sent: 8,
             since: 5000,
             prior,
+            scheduled: false,
         };
         let confirm = |prior, reply| {
             let mut result = pending(&session);
