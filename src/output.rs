@@ -17,6 +17,7 @@ pub enum Output {
     Actions(ActionReport),
     Composed(ComposeReport),
     Permissions(PermissionReport),
+    Meeting(MeetingReport),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +122,41 @@ pub struct PermissionReport {
     pub full_disk_access: PermissionStatus,
     /// Permission to control Mail.
     pub automation: PermissionStatus,
+    /// Permission to drive Outlook; only `meeting` needs it.
+    pub accessibility: PermissionStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MeetingReport {
+    /// `create`, `update`, or `cancel`.
+    pub action: String,
+    pub status: MeetingStatus,
+    pub subject: String,
+    /// The Outlook calendar's account.
+    pub calendar: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub attendees: Vec<String>,
+    pub location: Option<String>,
+    pub teams: Option<bool>,
+    /// Outlook's description of the meeting that update or cancel found.
+    pub found: Option<String>,
+    /// Outlook's prompt or state when it did not send.
+    pub prompt: Option<String>,
+    #[serde(skip)]
+    pub when: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingStatus {
+    /// A `--dry-run` result.
+    Planned,
+    /// `create` without `--send`: the meeting is open in Outlook, unsent.
+    Open,
+    Sent,
+    /// Outlook was asked to send but did not; `prompt` says why.
+    NotSent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -155,6 +191,7 @@ impl Output {
                 report.full_disk_access != PermissionStatus::Granted
                     || report.automation != PermissionStatus::Granted
             }
+            Self::Meeting(report) => report.status == MeetingStatus::NotSent,
             _ => false,
         }
     }
@@ -173,6 +210,7 @@ impl Output {
             Self::Actions(value) => serde_json::to_writer(&mut *out, value),
             Self::Composed(value) => serde_json::to_writer(&mut *out, value),
             Self::Permissions(value) => serde_json::to_writer(&mut *out, value),
+            Self::Meeting(value) => serde_json::to_writer(&mut *out, value),
         }
     }
 
@@ -198,10 +236,54 @@ impl Output {
             Self::Permissions(report) => {
                 writeln!(out, "mailctl:          {}", report.binary.display())?;
                 writeln!(out, "Full Disk Access: {}", report.full_disk_access.name())?;
-                writeln!(out, "Automation:       {}", report.automation.name())
+                writeln!(out, "Automation:       {}", report.automation.name())?;
+                writeln!(
+                    out,
+                    "Accessibility:    {} (meeting only)",
+                    report.accessibility.name()
+                )
             }
+            Self::Meeting(report) => write_meeting(out, report),
         }
     }
+}
+
+fn write_meeting(out: &mut impl Write, report: &MeetingReport) -> std::io::Result<()> {
+    let what = match report.action.as_str() {
+        "create" => "invitation",
+        "update" => "update",
+        _ => "cancellation",
+    };
+    let status = match report.status {
+        MeetingStatus::Planned if report.action == "create" => "Would create meeting".into(),
+        MeetingStatus::Planned => format!("Would send {what}"),
+        MeetingStatus::Open => "Open in Outlook, not sent".into(),
+        MeetingStatus::Sent => format!("Sent {what}"),
+        MeetingStatus::NotSent => format!("Did not send {what}"),
+    };
+    writeln!(out, "{status}: {}", report.subject)?;
+    if let Some(prompt) = &report.prompt {
+        writeln!(out, "  Outlook:   {prompt}")?;
+    }
+    if let Some(found) = &report.found {
+        writeln!(out, "  Meeting:   {}", found.trim())?;
+    }
+    if let Some(calendar) = &report.calendar {
+        writeln!(out, "  Calendar:  {calendar}")?;
+    }
+    if !report.when.is_empty() {
+        writeln!(out, "  When:      {}", report.when)?;
+    }
+    if !report.attendees.is_empty() {
+        writeln!(out, "  Attendees: {}", report.attendees.join(", "))?;
+    }
+    if let Some(location) = &report.location {
+        writeln!(out, "  Location:  {location}")?;
+    }
+    if let Some(teams) = report.teams {
+        writeln!(out, "  Teams:     {}", if teams { "on" } else { "off" })?;
+    }
+    Ok(())
 }
 
 fn write_accounts(out: &mut impl Write, accounts: &[Account]) -> std::io::Result<()> {

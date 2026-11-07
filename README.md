@@ -21,6 +21,8 @@ JSON.
   with dry-run planning and per-message results
 - saving new messages, replies, and forwards as drafts, or sending them
 - sending a saved draft exactly as it is, after review in Mail
+- creating, rescheduling, and cancelling meetings through Microsoft Outlook,
+  which sends the invitations from the calendar's own account
 
 It does not search full message bodies, save attachments, or attach files to
 outgoing mail. Forwards do not carry the original attachments.
@@ -30,6 +32,8 @@ outgoing mail. Forwards do not carry the original attachments.
 - macOS on Apple Silicon, with Mail.app signed in to the accounts you want
 - Rust toolchain for local builds (`rust-toolchain.toml` pins the version)
 - Full Disk Access and Automation permissions for the mailctl binary
+- For `meeting` only: the new Microsoft Outlook for Mac, running and signed in,
+  and Accessibility permission for the mailctl binary
 
 ## Install
 
@@ -76,6 +80,10 @@ mailctl permissions
 It waits for each grant and prints both states. `mailctl permissions --check`
 only reports them.
 
+`mailctl meeting` also needs **Accessibility** to drive Outlook. macOS has no
+prompt for it: add the binary that `mailctl permissions --check` names under
+System Settings > Privacy & Security > Accessibility and turn it on.
+
 The grants follow the binary's code signature. An ad-hoc signed rebuild is a
 new binary to macOS: run `mailctl permissions` again, and remove the old Full
 Disk Access entry.
@@ -95,6 +103,8 @@ mailctl trash 76037
 mailctl draft --to a@example.com --subject "Agenda" --body "Draft text"
 mailctl send 76140 --dry-run
 mailctl reply 76037 --body "Thanks, Friday works."
+mailctl meeting create --subject "Sync" --start 2026-11-20T15:00 \
+  --end 2026-11-20T15:30 --attendee a@example.edu --dry-run
 ```
 
 Run `mailctl help <command>` for every option. [SKILL.md](SKILL.md) documents

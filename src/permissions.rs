@@ -1,5 +1,6 @@
 //! Checks and requests the two macOS permissions mailctl needs: Full Disk
 //! Access for reading the Mail store, and Automation for controlling Mail.
+//! It also reports Accessibility, which only `meeting` needs to drive Outlook.
 //!
 //! macOS has no prompt for Full Disk Access, so the request opens its
 //! System Settings pane and reveals this binary in Finder for the user to
@@ -33,7 +34,29 @@ pub fn run(check: bool) -> Result<Output> {
         binary,
         full_disk_access,
         automation,
+        accessibility: accessibility(),
     }))
+}
+
+fn accessibility() -> PermissionStatus {
+    if unsafe { AXIsProcessTrusted() } {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
+    }
+}
+
+/// Fails with instructions unless mailctl may use the Accessibility API, which
+/// `meeting` uses to drive Outlook. macOS has no prompt that grants it.
+pub fn require_accessibility() -> Result<()> {
+    if accessibility() == PermissionStatus::Granted {
+        return Ok(());
+    }
+    bail!(
+        "mailctl needs Accessibility permission to drive Outlook: add {} under \
+         System Settings > Privacy & Security > Accessibility and turn it on",
+        binary()?.display()
+    )
 }
 
 /// The file macOS checks permissions against. `current_exe` returns the path
@@ -186,6 +209,11 @@ const ERR_AE_EVENT_WOULD_REQUIRE_USER_CONSENT: i32 = -1744;
 struct AEDesc {
     descriptor_type: u32,
     data_handle: *mut c_void,
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
 }
 
 #[link(name = "CoreServices", kind = "framework")]
