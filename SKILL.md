@@ -1,6 +1,6 @@
 ---
 name: mailctl
-description: Use when reading or managing email in macOS Apple Mail with the mailctl CLI, including listing and searching messages across accounts, reading message bodies and threads, marking read or flagged, moving, archiving, or trashing messages, and drafting, replying to, forwarding, or sending saved drafts. Covers accounts that sign in with OAuth, since mailctl works through Mail.app rather than mail server credentials.
+description: Use when reading or managing email in macOS Apple Mail with the mailctl CLI, including listing and searching messages across accounts, reading message bodies and threads, marking read or flagged, moving, archiving, or trashing messages, drafting, replying to, forwarding, or sending saved drafts, and creating, rescheduling, or cancelling meetings with invitations sent through Microsoft Outlook. Covers accounts that sign in with OAuth, since mailctl works through Mail.app and Outlook rather than server credentials.
 ---
 
 # mailctl
@@ -19,6 +19,9 @@ use OAuth. It never handles passwords or tokens.
   `draft`, `reply`, `forward`, `send`) run JavaScript for Automation against
   Mail.app.
   Mail.app syncs each change to the server.
+- `meeting` drives Microsoft Outlook, which sends meeting invitations,
+  updates, and cancellations from its calendar's account. See
+  [Meetings](#meetings).
 
 Check the installed build before relying on a flag:
 
@@ -45,6 +48,13 @@ mailctl version --json
   account's Drafts mailbox, where the user can review it in Mail. Once the
   user approves a saved draft, send it with `mailctl send <id>` rather than
   composing it again with `--send`.
+- `meeting create` without `--send` only opens the filled-in meeting in
+  Outlook for the user to review and send there. Never pass `--send` to it,
+  or run `meeting update` or `meeting cancel` without `--dry-run`, unless the
+  user has approved, in this conversation, the subject, time, attendees, and
+  location of the new meeting, or the exact change or cancellation of an
+  existing one: those email the attendees at once. Run `--dry-run --json`
+  first and show that plan.
 - Message ids are Mail's internal row ids. They change whenever Mail moves a
   message, including moves into trash. Use the `new_id` field from a move
   result, or rerun `list` or `search`, before acting on that message again.
@@ -74,8 +84,13 @@ or agent host that runs it. It needs two:
 Both grants follow the binary's code signature, so a rebuilt mailctl needs
 them again. Granting Full Disk Access to the terminal does not help.
 
-Check both with `mailctl permissions --check --json`, which changes nothing
-and exits nonzero unless both are `granted`. `automation` is `unknown` while
+`meeting` also needs **Accessibility**, to drive Outlook's windows. macOS has
+no prompt for it; without it, `meeting` fails with a message that names the
+binary to add under System Settings > Privacy & Security > Accessibility.
+
+Check them with `mailctl permissions --check --json`, which changes nothing
+and exits nonzero unless Full Disk Access and Automation are `granted`; it
+reports `accessibility` without counting it. `automation` is `unknown` while
 Mail is not running. When a permission is missing, ask the user to run
 `mailctl permissions` in a terminal: it opens the right System Settings pane,
 shows the Automation dialog, and waits for the user to act.
@@ -296,6 +311,70 @@ are copies of the sent message.
  "subject":"…","from_mailbox":"work@example.edu/Drafts",
  "to_mailbox":"work@example.edu/Sent Items","status":"done","error":null}],
  "leftovers":[76298]}
+```
+
+## Meetings
+
+```sh
+mailctl meeting create --subject "Project sync" \
+  --start 2026-11-20T15:00 --end 2026-11-20T15:30 \
+  --attendee a@example.edu --attendee b@example.com \
+  --location "Hackerman Hall 320" --dry-run --json
+mailctl meeting create … --json              # open it in Outlook, unsent
+mailctl meeting create … --send --json       # send the invitations
+mailctl meeting update --subject "Project sync" --start 2026-11-20T15:00 \
+  --new-start 2026-11-20T16:00 --json
+mailctl meeting update --subject "Project sync" --start 2026-11-20T16:00 \
+  --location "" --json                       # remove the location
+mailctl meeting cancel --subject "Project sync" --start 2026-11-20T16:00 \
+  --message "Moving this to email." --json
+```
+
+Mail.app can only attach an `.ics` file, which Exchange does not treat as a
+meeting, so `meeting` works through the new Microsoft Outlook for Mac. Outlook
+must be running and signed in. It sends from its default calendar's account,
+which the result reports as `calendar`. Outlook comes to the front for a
+moment when it sends, then the previous app is brought back.
+
+- `create` fills in a meeting with required attendees, an optional location,
+  and Teams off unless `--teams` is given. Without `--send`, it leaves the
+  meeting open in an Outlook window, unsent and unsaved, with `status: open`:
+  the user reviews it and presses Send there, or closes the window to drop
+  it. Nothing keeps it if Outlook quits. With `--send`, it sends the
+  invitations. Times are local `YYYY-MM-DDTHH:MM` or RFC 3339, whole minutes,
+  and the meeting must start and end on the same day.
+- `update` and `cancel` send at once; Outlook has no unsent state for a
+  change to an existing meeting. They find the meeting by its exact subject
+  and current start time with Outlook's search, and act only on a meeting the
+  user organizes that has invitees. `update` changes the start, the end, or
+  the location and sends the update to every attendee; with only
+  `--new-start`, Outlook keeps the duration. `--location ""` removes the
+  location.
+- `--dry-run` on `create` prints the meeting without opening Outlook. On
+  `update` and `cancel`, it finds the meeting and reports Outlook's
+  description of it as `found`, without opening or changing it.
+- Locations and attendees are entered as typed, never matched to a directory
+  suggestion such as a room. If Outlook reads the text differently, for
+  example `Name (detail)` as a room, the command stops before sending.
+- Before sending, mailctl reads the meeting back from Outlook and stops if the
+  subject, times, attendees, location, or Teams setting differ from the
+  request. An error that names the meeting window left open in Outlook means
+  nothing was sent; tell the user to review and discard that window in
+  Outlook. Close any Outlook window for the same meeting before `update` or
+  `cancel`.
+- `status` is `planned` for `--dry-run`, `open` for `create` without
+  `--send`, `sent`, or `not_sent`. `not_sent` means Outlook showed a prompt
+  or did not close the meeting window; `prompt` says which, and the exit
+  code is nonzero. Check Outlook before trying again; never resend blindly.
+- Adding or removing attendees of an existing meeting, meeting bodies, and
+  answering invitations are not supported; tell the user to do those in
+  Outlook.
+
+```json
+{"action":"create","status":"sent","subject":"Project sync",
+ "calendar":"me@example.edu","start":"2026-11-20T15:00:00-05:00",
+ "end":"2026-11-20T15:30:00-05:00","attendees":["a@example.edu"],
+ "location":"Hackerman Hall 320","teams":false,"found":null,"prompt":null}
 ```
 
 ## JSON Output

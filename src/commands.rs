@@ -5,7 +5,7 @@ use crate::output::{
     MessageDetail, MessageView, Output, SavedDraft,
 };
 use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store, StoredCopy};
-use crate::{dates, emlx, permissions, scripting, version};
+use crate::{dates, emlx, meeting, permissions, scripting, version};
 use anyhow::{Context, Result};
 use chrono::Local;
 use mail_parser::{MessageParser, html_to_text};
@@ -19,6 +19,8 @@ pub fn run(command: Command) -> Result<Output> {
     let command = match command {
         Command::Version => return Ok(Output::Version(version::info())),
         Command::Permissions { check } => return permissions::run(check),
+        // Meetings go through Outlook and never touch the Mail store.
+        Command::Meeting { action } => return meeting::run(action),
         // Sending needs neither the store nor the account catalog.
         Command::Draft { send: true, .. } => {
             return compose(None, "draft", draft_request(command)?);
@@ -37,6 +39,7 @@ pub fn run(command: Command) -> Result<Output> {
         Command::Version
         | Command::Completions { .. }
         | Command::Permissions { .. }
+        | Command::Meeting { .. }
         | Command::Draft { .. } => {
             unreachable!("handled earlier")
         }

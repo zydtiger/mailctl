@@ -1,4 +1,4 @@
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -161,6 +161,87 @@ pub enum Command {
         #[arg(long)]
         send: bool,
     },
+
+    /// Create, reschedule, or cancel meetings through Microsoft Outlook, which
+    /// sends the invitations from the calendar's own account.
+    Meeting {
+        #[command(subcommand)]
+        action: MeetingAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MeetingAction {
+    /// Create a meeting in Outlook's default calendar and leave it open there
+    /// unsent, or send the invitations with --send.
+    Create {
+        #[arg(long)]
+        subject: String,
+        /// Start: local `YYYY-MM-DDTHH:MM` or RFC 3339.
+        #[arg(long)]
+        start: String,
+        /// End on the same day; same formats as --start.
+        #[arg(long)]
+        end: String,
+        /// Required attendee address; repeat for several.
+        #[arg(long = "attendee", required = true)]
+        attendees: Vec<String>,
+        /// Location text, kept as typed rather than matched to a room.
+        #[arg(long)]
+        location: Option<String>,
+        /// Keep the Teams meeting Outlook can add; off by default.
+        #[arg(long)]
+        teams: bool,
+        /// Send the invitations instead of leaving the meeting open in Outlook
+        /// for review.
+        #[arg(long)]
+        send: bool,
+        /// Print the meeting without opening Outlook.
+        #[arg(long, conflicts_with = "send")]
+        dry_run: bool,
+    },
+
+    /// Reschedule or relocate a meeting you organize and send the update.
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["new_start", "new_end", "location"])))]
+    Update {
+        #[command(flatten)]
+        meeting: MeetingRef,
+        /// New start; Outlook keeps the duration unless --new-end is given.
+        #[arg(long)]
+        new_start: Option<String>,
+        /// New end on the same day as the start.
+        #[arg(long)]
+        new_end: Option<String>,
+        /// New location; an empty value removes it.
+        #[arg(long)]
+        location: Option<String>,
+        /// Find the meeting without opening or changing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Cancel a meeting you organize and send the cancellation.
+    Cancel {
+        #[command(flatten)]
+        meeting: MeetingRef,
+        /// Note to the invitees.
+        #[arg(long)]
+        message: Option<String>,
+        /// Find the meeting without opening or changing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// An existing meeting, found by Outlook's event search.
+#[derive(Debug, Clone, Args)]
+pub struct MeetingRef {
+    /// Subject, exactly as Outlook shows it.
+    #[arg(long)]
+    pub subject: String,
+    /// Current start: local `YYYY-MM-DDTHH:MM` or RFC 3339.
+    #[arg(long)]
+    pub start: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -270,6 +351,21 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn meeting_update_needs_a_change() {
+        let base = [
+            "mailctl",
+            "meeting",
+            "update",
+            "--subject",
+            "Sync",
+            "--start",
+            "2026-11-20T15:00",
+        ];
+        assert!(Cli::try_parse_from(base).is_err());
+        assert!(Cli::try_parse_from(base.iter().chain(&["--location", ""])).is_ok());
     }
 
     #[test]

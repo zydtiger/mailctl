@@ -12,11 +12,13 @@ fetch.
 | `src/emlx.rs` | Locating and reading `.emlx` message files |
 | `src/catalog.rs` | Accounts (cached from Mail.app) joined with store mailboxes; mailbox selection |
 | `src/commands.rs` | Command logic: query building, write planning, move confirmation |
-| `src/scripting.rs` | Runs `src/jxa/mail.js` through `osascript` |
+| `src/scripting.rs` | Runs the JXA bridges through `osascript` |
 | `src/jxa/mail.js` | The Mail.app bridge: one JSON request in, one JSON response out |
+| `src/meeting.rs` | `meeting` commands: validation, bridge requests, reports |
+| `src/jxa/outlook.js` | The Outlook bridge: drives Outlook's windows through the Accessibility API |
 | `src/output.rs` | Result types; JSON and human rendering |
 | `src/responsibility.rs` | Re-executes mailctl as its own TCC responsible process |
-| `src/permissions.rs` | Checks and requests Full Disk Access and Automation |
+| `src/permissions.rs` | Checks and requests Full Disk Access and Automation; reports Accessibility |
 
 ## Mail Store
 
@@ -115,6 +117,76 @@ message, and an XML property list.
 - `osascript` inherits mailctl's TCC responsibility (see below), so the
   Automation permission names mailctl.
 
+## Outlook Meetings
+
+A meeting request needs an iTIP `text/calendar; method=REQUEST` part that the
+organizer's server tracks. Mail.app can only attach an `.ics` file, EventKit's
+attendees are read-only, and Calendar.app's Exchange accounts stop syncing
+when Exchange Online retires EWS. The new Outlook for Mac sends meetings
+through its own Microsoft 365 connection, but it has no scripting
+dictionary, so `src/jxa/outlook.js` drives its windows through the
+Accessibility API, called through the JXA ObjC bridge. It never uses System
+Events, so it needs Accessibility but no Automation permission. Observed with
+Outlook 16.113 on macOS 26.6, English UI:
+
+- Outlook's elements are labelled by `AXDescription`: the editor's `Subject`,
+  `Add required people` (`Required Attendees` once filled), and
+  `Add a location` (`Locations`) text fields; `AXDateTimeArea` pickers titled
+  `Start date`, `Start time`, and `End time`; an `AXSwitch` titled
+  `Teams meeting`; and a `Calendar (<account>), From` pop-up. Event windows
+  are titled `<subject> • Calendar • <account>`.
+- Writing an `NSDate` to a picker's `AXValue` through
+  `AXUIElementSetAttributeValue` updates Outlook's model. System Events
+  reports the same write as done but cannot convert the date, so nothing
+  changes. Setting the start date or time moves the end with it.
+- Writing `AXValue` to the location or attendee field shows the text without
+  updating Outlook's model, and Outlook then asks about a missing location.
+  Writing `AXSelectedText` after focusing the field does update it. Return
+  turns the text into the first directory suggestion, which for a location
+  can be a room mailbox, so the bridge presses Escape and then Tab, which
+  keeps the typed text as the token. Each token appears as an
+  `AXStaticText` beside the field, which the bridge reads back. Outlook reads
+  `Name (detail)` as a room name and address.
+- Keys go to Outlook's process with `CGEventPostToPid`, never to the
+  frontmost app: an earlier System Events `keystroke` typed into whatever
+  app was in front.
+- Outlook ignores the editor's Send, Save, and Discard buttons, and the
+  cancellation's Send cancellation, unless it is the active app: `AXPress`
+  only marks them `, pressed`. Activating it through the application's
+  `AXFrontmost` attribute and pressing within the same `osascript` run
+  works; between separate runs the launching app can take the front back.
+  The bridge restores the previously focused app afterwards.
+- Sending a meeting without a location shows an `AXSheet` asking for one,
+  with `Send invitation` and `Continue editing` buttons. Sheets are children
+  of the window and do not appear in System Events' `UI elements`.
+- After the first attendee is added, Outlook may turn on Teams. The bridge
+  sets the switch afterwards.
+- Event search (the main window's `AXSearchField` while the Calendar view is
+  shown) lists matches in an `AXTable` described `Calendar Events`. Each row's
+  cell is described `<subject>, starts on Nov 27, 2026 at 10:00 AM to
+  10:30 AM, you are the organizer, …`, with U+202F before AM and PM.
+  Results arrive per calendar, so an invitation copy in another account's
+  calendar can be listed before the organizer's row. A search with no results
+  leaves the previous results listed; writing an empty `AXValue` and pressing
+  Escape ends the search first. The search field takes a written `AXValue`,
+  while Command-A does not reliably select its text.
+  File > Open > Current Item often does nothing after a search; focusing the
+  table, selecting the row, and pressing Return opens it.
+- An opened event is read-only and shows `Cancel` only for a meeting with
+  invitees (a plain event shows `Delete`). While it loads, the window briefly
+  shows other buttons, including a `Cancel`, so the bridge waits for `Edit`.
+  `Edit` switches the same window to the editor but returns an AX error.
+  `Cancel` adds a panel with an `Optional message to invitees` text area
+  and `Send cancellation`.
+- Opening an event that already has a window only brings that window
+  forward, so `update` and `cancel` refuse when one is open.
+- Outlook sends an update after Send in the editor, and attendees' calendars
+  follow it. A cancelled meeting moves to the organizer's Deleted Items.
+- Edits to an existing meeting, and its cancellation panel, take effect only
+  on Send; closing the window drops them. So only `create` has an unsent
+  state: without `--send`, the bridge leaves the filled-in editor open, which
+  Outlook does not save anywhere.
+
 ## Permissions
 
 `src/responsibility.rs` re-executes mailctl through `posix_spawn` with
@@ -130,4 +202,6 @@ and the Automation usage string.
 `mailctl permissions` checks Full Disk Access by listing `~/Library/Mail` in a
 child process, so a grant made while it waits is seen. It checks Automation
 with `AEDeterminePermissionToAutomateTarget`, which answers only while Mail
-is running and shows the consent dialog when asked to.
+is running and shows the consent dialog when asked to. It reports
+Accessibility with `AXIsProcessTrusted`; `osascript` inherits the
+responsibility, so the Outlook bridge runs under mailctl's grant.

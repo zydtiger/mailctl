@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod dates;
 mod emlx;
+mod meeting;
 mod output;
 mod permissions;
 mod responsibility;
