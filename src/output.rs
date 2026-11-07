@@ -113,6 +113,23 @@ pub struct ComposeReport {
     pub sender: String,
     pub to: Vec<String>,
     pub sent: bool,
+    /// The saved draft as the store shows it; absent when the message was sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft: Option<SavedDraft>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SavedDraft {
+    /// The newest new Drafts message with the request's subject, sender, and
+    /// To and Cc addresses; `None` when none appeared in time or the store
+    /// could not be read.
+    pub id: Option<i64>,
+    /// Whether Mail's Drafts stopped changing while `id` was the draft.
+    pub confirmed: bool,
+    /// Other Drafts messages with the subject that appeared during the call,
+    /// such as copies Mail saved more than once. Unrelated drafts with the
+    /// same subject saved meanwhile are included too.
+    pub copies: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,16 +202,7 @@ impl Output {
             Self::Message(detail) => write_detail(out, detail),
             Self::Raw(bytes) => out.write_all(bytes),
             Self::Actions(report) => write_actions(out, report),
-            Self::Composed(report) => {
-                let verb = if report.sent { "Sent" } else { "Saved draft" };
-                writeln!(
-                    out,
-                    "{verb}: {} -> {} (from {})",
-                    report.subject,
-                    report.to.join(", "),
-                    report.sender
-                )
-            }
+            Self::Composed(report) => write_composed(out, report),
             Self::Permissions(report) => {
                 writeln!(out, "mailctl:          {}", report.binary.display())?;
                 writeln!(out, "Full Disk Access: {}", report.full_disk_access.name())?;
@@ -384,6 +392,41 @@ fn write_actions(out: &mut impl Write, report: &ActionReport) -> std::io::Result
     Ok(())
 }
 
+fn write_composed(out: &mut impl Write, report: &ComposeReport) -> std::io::Result<()> {
+    let verb = if report.sent { "Sent" } else { "Saved draft" };
+    writeln!(
+        out,
+        "{verb}: {} -> {} (from {})",
+        report.subject,
+        report.to.join(", "),
+        report.sender
+    )?;
+    let Some(draft) = &report.draft else {
+        return Ok(());
+    };
+    match (draft.id, draft.confirmed) {
+        (Some(id), true) => writeln!(out, "Draft id: {id}")?,
+        (Some(id), false) => writeln!(
+            out,
+            "Draft id: {id} (unconfirmed: Mail was still changing Drafts; list drafts before acting on it)"
+        )?,
+        (None, _) => writeln!(
+            out,
+            "Draft id: unknown; find the draft in Drafts before acting on it"
+        )?,
+    }
+    if !draft.copies.is_empty() {
+        let ids: Vec<String> = draft.copies.iter().map(i64::to_string).collect();
+        let label = if draft.id.is_some() {
+            "Other new drafts with the same subject"
+        } else {
+            "New drafts with the same subject (the draft may be among them)"
+        };
+        writeln!(out, "{label}: {}", ids.join(" "))?;
+    }
+    Ok(())
+}
+
 fn display_address(address: &AddressView) -> String {
     match address.name.as_deref().filter(|name| !name.is_empty()) {
         Some(name) => format!("{name} <{}>", address.address),
@@ -418,6 +461,66 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "Drafts with the same subject: 76298 76299\n"
         );
+    }
+
+    #[test]
+    fn reports_the_saved_draft_and_its_copies() {
+        let report = |draft: Option<SavedDraft>| {
+            Output::Composed(ComposeReport {
+                action: "draft".into(),
+                subject: "Agenda".into(),
+                sender: "Me <me@example.edu>".into(),
+                to: vec!["a@example.com".into()],
+                sent: draft.is_none(),
+                draft,
+            })
+        };
+        let human = |output: &Output| {
+            let mut out = Vec::new();
+            output.write_human(&mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let json = |output: &Output| {
+            let mut out = Vec::new();
+            output.write_json(&mut out).unwrap();
+            serde_json::from_slice::<serde_json::Value>(&out).unwrap()
+        };
+
+        let saved = report(Some(SavedDraft {
+            id: Some(76466),
+            confirmed: true,
+            copies: vec![76465],
+        }));
+        assert_eq!(
+            human(&saved),
+            "Saved draft: Agenda -> a@example.com (from Me <me@example.edu>)\n\
+             Draft id: 76466\n\
+             Other new drafts with the same subject: 76465\n"
+        );
+        assert_eq!(
+            json(&saved)["draft"],
+            serde_json::json!({ "id": 76466, "confirmed": true, "copies": [76465] })
+        );
+
+        let unconfirmed = report(Some(SavedDraft {
+            id: Some(76466),
+            ..SavedDraft::default()
+        }));
+        assert!(human(&unconfirmed).contains("Draft id: 76466 (unconfirmed"));
+        let missing = human(&report(Some(SavedDraft {
+            copies: vec![76465],
+            ..SavedDraft::default()
+        })));
+        assert!(missing.contains("Draft id: unknown"));
+        assert!(missing.contains("the draft may be among them): 76465"));
+
+        // A sent message has no draft, and its JSON keeps the old fields only.
+        let sent = report(None);
+        assert_eq!(
+            human(&sent),
+            "Sent: Agenda -> a@example.com (from Me <me@example.edu>)\n"
+        );
+        assert!(json(&sent).get("draft").is_none());
     }
 
     #[test]

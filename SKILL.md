@@ -208,8 +208,32 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
 ```
 
 - Without `--send`, each command saves a draft in the sending account's Drafts
-  mailbox and returns its subject, sender, and recipients. List it with
-  `mailctl list --mailbox drafts --json`.
+  mailbox and returns its subject, sender, recipients, and a `draft` object.
+  After Mail saves, it waits until the new drafts with that subject have
+  stayed unchanged for 10 seconds, and at most 30 seconds.
+  - `draft.id` is the saved draft's id; use it for `show` and `send` rather
+    than searching by subject. It is `null` when no new draft with the
+    sender and recipients appeared in time, or when mailctl could not read
+    the store, for example without Full Disk Access; `copies` is then
+    empty because nothing was searched. A draft with the same subject,
+    sender, and recipients saved elsewhere during the call can be taken for
+    the new one, so show the draft to the user before sending it.
+  - `draft.confirmed` is `false` when Mail was still changing Drafts at the
+    deadline or `id` is `null`. Then run `mailctl list --mailbox drafts
+    --json` before acting on the id.
+  - `draft.copies` lists the other Drafts messages with the same subject
+    that appeared during the call, such as a second save of the same
+    compose. Drafts that existed before the call are never included, but a
+    draft with the same subject that the user or another call saved
+    meanwhile is. When `id` is `null`, the draft itself may be among them.
+    Show them to the user with `mailctl show`, and trash them with `mailctl
+    trash` only after the user confirms they are unwanted copies.
+
+  ```json
+  {"action":"draft","subject":"Agenda","sender":"Me <work@example.edu>",
+   "to":["a@example.com"],"sent":false,
+   "draft":{"id":76466,"confirmed":true,"copies":[76465]}}
+  ```
 - `--from` takes a sender address and selects the sending account. Without it,
   Mail uses its default account. Replies and forwards send from the account
   that received the original.
@@ -226,7 +250,7 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
 ## Sending Drafts
 
 ```sh
-mailctl list --mailbox drafts --json        # find the draft id
+mailctl list --mailbox drafts --json        # only without a confirmed draft.id
 mailctl show 76136 --json                   # show the user what will be sent
 mailctl send 76136 --dry-run --json
 mailctl send 76136 --json
