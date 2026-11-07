@@ -47,7 +47,8 @@ mailctl version --json
   text in this conversation. Without `--send`, the message is saved to the
   account's Drafts mailbox, where the user can review it in Mail. Once the
   user approves a saved draft, send it with `mailctl send <id>` rather than
-  composing it again with `--send`.
+  composing it again with `--send`. The same approval, plus the send time,
+  is needed for `mailctl send <id> --at <time>`.
 - `meeting create` without `--send` only opens the filled-in meeting in
   Outlook for the user to review and send there. Never pass `--send` to it,
   or run `meeting update` or `meeting cancel` without `--dry-run`, unless the
@@ -84,9 +85,10 @@ or agent host that runs it. It needs two:
 Both grants follow the binary's code signature, so a rebuilt mailctl needs
 them again. Granting Full Disk Access to the terminal does not help.
 
-`meeting` also needs **Accessibility**, to drive Outlook's windows. macOS has
-no prompt for it; without it, `meeting` fails with a message that names the
-binary to add under System Settings > Privacy & Security > Accessibility.
+`meeting` and `send --at` also need **Accessibility**, to drive Outlook's
+windows and Mail's Send Later sheet. macOS has no prompt for it; without it,
+they fail with a message that names the binary to add under System Settings
+> Privacy & Security > Accessibility.
 
 Check them with `mailctl permissions --check --json`, which changes nothing
 and exits nonzero unless Full Disk Access and Automation are `granted`; it
@@ -269,6 +271,7 @@ mailctl list --mailbox drafts --json        # only without a confirmed draft.id
 mailctl show 76136 --json                   # show the user what will be sent
 mailctl send 76136 --dry-run --json
 mailctl send 76136 --json
+mailctl send 76136 --at 2026-11-09T08:30 --json   # schedule with Send Later
 ```
 
 `send` sends the message saved in a Drafts mailbox itself, rather than a
@@ -312,6 +315,29 @@ are copies of the sent message.
  "to_mailbox":"work@example.edu/Sent Items","status":"done","error":null}],
  "leftovers":[76298]}
 ```
+
+### Scheduling
+
+`send --at <time>` schedules the draft with Mail's Send Later instead of
+sending it. The time is local `YYYY-MM-DDTHH:MM` or RFC 3339, at least a
+minute ahead. Mail, not the mail server, sends it at that time: this Mac must
+be on, online, and running Mail then, which matters for a time when the user
+is likely away. Mail's scripting has no Send Later, so mailctl opens the
+draft in a compose window and fills Mail's Send Later sheet; Mail comes to
+the front for a moment.
+
+The result has `action: "schedule"`, the time in `at`, and
+`On My Mac/SendLater` as `to_mailbox`, where Mail keeps the message until it
+sends it. `done` means the store shows it there under `new_id`. List what is
+scheduled with `mailctl list --mailbox "On My Mac/SendLater" --json`. To
+change or cancel a scheduled message, tell the user to do it from that
+mailbox in Mail.
+
+When Mail still holds the compose mailctl created for the draft, Mail opens
+the draft read-only, and mailctl schedules a copy made with Message > Send
+Again; the draft then stays in Drafts and is listed in `leftovers`. A
+`failed` result whose `error` says a compose window is left open in Mail
+scheduled nothing; tell the user to close that window in Mail.
 
 ## Meetings
 

@@ -1,6 +1,7 @@
 // Mail.app bridge for mailctl. Takes one JSON request in argv[0] and returns
 // one JSON response. Messages are addressed by Envelope Index ROWID, which is
 // Mail's scripting `id`, inside the mailbox the store says they live in.
+// ax.js is prepended for `schedule`, which Mail's scripting cannot do.
 
 function run(argv) {
   const Mail = Application("Mail");
@@ -100,6 +101,75 @@ const handlers = {
       return { sent: Boolean(message.send()) };
     } catch (error) {
       return { sent: false, error: String(error) };
+    }
+  },
+
+  // Schedules a draft with Mail's Send Later, which scripting does not offer:
+  // the draft is opened in a compose window and the Send Later sheet is
+  // filled through the Accessibility API. Opening a draft whose compose Mail
+  // still holds shows it read-only, so Send Again opens a compose from it and
+  // the draft stays in Drafts. `refused` means nothing was scheduled; a
+  // compose window that is still open is named in the reason.
+  schedule(Mail, request) {
+    let o;
+    let compose;
+    let viewer = null;
+    try {
+      o = axApp("com.apple.mail", "Mail");
+      const draft = messageRef(Mail, request.target);
+      const subject = draft.subject(); // Fails here when the draft is gone.
+      if (!subject) throw new Error("the draft has no subject, which mailctl needs to find its compose window");
+      if (composeWindows(o, subject).length) {
+        throw new Error(`a compose window for "${subject}" is already open in Mail; close it and try again`);
+      }
+      const before = windows(o);
+      Mail.open(draft);
+      const opened = waitFor(() => windows(o).find((win) => !before.some((old) => old.isEqual(win))), 10, "Mail did not open the draft");
+      if (isCompose(opened)) {
+        compose = opened;
+      } else {
+        viewer = opened;
+        const prior = windows(o);
+        inFront(o, viewer, () => menu(o, ["Message", "Send Again"], 5));
+        compose = waitFor(
+          () => windows(o).find((win) => !prior.some((old) => old.isEqual(win)) && isCompose(win)),
+          10,
+          "Mail did not open a compose window for the draft",
+        );
+      }
+      const shown = text(find(compose, (el) => text(el, "AXIdentifier") === "Mail.subjectField"), "AXValue");
+      if (shown !== subject) throw new Error(`Mail opened a compose window for "${shown}" instead`);
+    } catch (error) {
+      if (viewer !== null) closeWindow(viewer);
+      const left = compose ? `; its compose window is left open in Mail` : "";
+      return { refused: message(error) + left };
+    }
+    if (viewer !== null) closeWindow(viewer);
+    try {
+      inFront(o, compose, () => {
+        menu(o, ["Message", "Send Later", "Send Later…"], 5);
+        const sheet = waitFor(() => children(compose).find((el) => role(el) === "AXSheet"), 5, "Mail did not show the Send Later sheet");
+        const picker = (id) => find(sheet, (el) => text(el, "AXIdentifier") === id, 4);
+        for (const id of ["Mail.datePicker.stepper", "Mail.timePicker.stepper"]) {
+          set(picker(id), "AXValue", $.NSDate.dateWithTimeIntervalSince1970(request.at));
+          delay(0.3);
+        }
+        const chosen = get(picker("Mail.timePicker.stepper"), "AXValue");
+        if (chosen === null || Math.floor(chosen.timeIntervalSince1970 / 60) !== Math.floor(request.at / 60)) {
+          press(button(sheet, "Cancel"));
+          throw new Error("Mail did not take the scheduled time");
+        }
+        press(button(sheet, "Schedule"));
+      });
+    } catch (error) {
+      return { refused: message(error) + "; the compose window is left open in Mail" };
+    }
+    // Schedule was pressed: never report a plain refusal from here on.
+    try {
+      waitFor(() => !isOpen(o, compose), 10, "");
+      return { sent: true };
+    } catch (error) {
+      return { sent: false, error: "Mail did not close the compose window after Schedule" };
     }
   },
 
@@ -238,6 +308,20 @@ function openedCompose(Mail, before, subject) {
   throw new Error(
     "Mail did not open the draft as an outgoing message; close any window showing the draft in Mail and try again",
   );
+}
+
+function isCompose(win) {
+  return find(win, (el) => text(el, "AXIdentifier") === "Mail.toField", 8) !== null;
+}
+
+// Mail titles a compose window with its subject.
+function composeWindows(o, subject) {
+  return windows(o).filter((win) => text(win, "AXTitle") === subject && isCompose(win));
+}
+
+function closeWindow(win) {
+  const close = get(win, "AXCloseButton");
+  if (close !== null) press(close);
 }
 
 function join(body, quoted) {

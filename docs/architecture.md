@@ -12,7 +12,8 @@ fetch.
 | `src/emlx.rs` | Locating and reading `.emlx` message files |
 | `src/catalog.rs` | Accounts (cached from Mail.app) joined with store mailboxes; mailbox selection |
 | `src/commands.rs` | Command logic: query building, write planning, move confirmation |
-| `src/scripting.rs` | Runs the JXA bridges through `osascript` |
+| `src/scripting.rs` | Runs the JXA bridges through `osascript`, each prefixed with `src/jxa/ax.js` |
+| `src/jxa/ax.js` | Accessibility helpers shared by both bridges |
 | `src/jxa/mail.js` | The Mail.app bridge: one JSON request in, one JSON response out |
 | `src/meeting.rs` | `meeting` commands: validation, bridge requests, reports |
 | `src/jxa/outlook.js` | The Outlook bridge: drives Outlook's windows through the Accessibility API |
@@ -116,6 +117,34 @@ message, and an XML property list.
   `show` converts the HTML when the text part is blank.
 - `osascript` inherits mailctl's TCC responsibility (see below), so the
   Automation permission names mailctl.
+
+## Send Later
+
+Mail's scripting dictionary has only an immediate `send`, so `send --at`
+drives the Send Later UI through the Accessibility API, as the Outlook bridge
+does. Observed with Mail on macOS 26.6, English UI:
+
+- Message > Send Later is a submenu of "Send 8:00 AM Tomorrow", "Send 8:00 AM
+  Monday" (U+202F before AM), and "Send Later…" (U+2026). They are enabled only
+  for a compose window with a recipient, and only after Mail has rebuilt the
+  menu for a newly key window, so the bridge waits for the item.
+- "Send Later…" shows an `AXSheet` on the compose window with `AXDateTimeArea`
+  pickers identified `Mail.datePicker.stepper`, `Mail.timePicker.stepper`,
+  `Mail.datePicker.calendar`, and `Mail.timePicker.clock`, and Cancel and
+  Schedule buttons. Writing an `NSDate` to the two stepper pickers' `AXValue`
+  sets all four. The sheet says the message "will be delivered by this
+  device", so Mail sends it locally.
+- Schedule closes the compose window and files the message in
+  `On My Mac/SendLater` within a few seconds, with the draft removed and
+  `date_received` set to the time it was scheduled.
+- A compose window carries the subject as its title, and its fields are
+  identified `Mail.toField`, `Mail.ccField`, and `Mail.subjectField`.
+- Setting `visible` on a held compose shows an empty window rather than its
+  message. Opening a draft whose compose Mail holds shows a read-only viewer;
+  Message > Send Again there opens a compose window with the draft's content,
+  which leaves the draft in Drafts.
+- Closing a changed compose window asks "Save this message as a draft?" with
+  Save, Don't Save, and Cancel.
 
 ## Outlook Meetings
 

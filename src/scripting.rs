@@ -11,8 +11,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::process::Command;
 
-const MAIL: &str = include_str!("jxa/mail.js");
-const OUTLOOK: &str = include_str!("jxa/outlook.js");
+// Both bridges start with the shared Accessibility helpers.
+const MAIL: &str = concat!(include_str!("jxa/ax.js"), include_str!("jxa/mail.js"));
+const OUTLOOK: &str = concat!(include_str!("jxa/ax.js"), include_str!("jxa/outlook.js"));
 
 #[derive(Deserialize)]
 struct Response {
