@@ -91,6 +91,25 @@ message, and an XML property list.
   before, and reports other Drafts messages with the same subject as
   leftovers. Exchange has taken up to about ten seconds to file a sent
   message in Sent Items.
+- One scripted compose and `save()` can leave more than one Drafts message.
+  On Exchange, one `draft` call left two messages stored in the same second
+  with the same subject, To, and body, different Message-IDs, and
+  consecutive ids, and a draft first listed as id N was later found only as
+  N+1. On Gmail, a copy without To recipients appeared beside the draft and
+  disappeared a few seconds later. Mail autosaving the held compose besides
+  `save()` would explain this, but no live trace has confirmed it.
+  `draft`, `reply`, and `forward` without `--send` therefore record the ids
+  already in every Drafts mailbox before composing, then poll the store for
+  messages stored since then with the compose's subject. The newest one
+  with the compose's sender address and To and Cc addresses is the draft,
+  and the rest are reported as copies, whatever their sender, since Mail
+  may store the compose before mailctl sets its sender. mailctl moves none
+  of them. The id is confirmed once that set has stayed unchanged, with
+  every store read succeeding, for ten seconds, Exchange's filing time,
+  within a thirty-second limit. Nothing ties a stored draft to the compose
+  beyond these fields, so a matching draft saved elsewhere during the call
+  can be taken for it. Composing still saves when the store cannot be read,
+  and then reports no id.
 - Mail's drafts store an empty `text/plain` part beside the HTML body, so
   `show` converts the HTML when the text part is blank.
 - `osascript` inherits mailctl's TCC responsibility (see below), so the

@@ -253,6 +253,7 @@ function finish(message, send) {
     subject: message.subject(),
     sender: message.sender(),
     to: message.toRecipients().map((recipient) => recipient.address()),
+    cc: message.ccRecipients().map((recipient) => recipient.address()),
   };
   if (send) {
     // Never report a plain failure here: Mail may have sent it anyway.
@@ -262,7 +263,9 @@ function finish(message, send) {
     return Object.assign(summary, { sent: true });
   }
   // Closing an invisible compose neither saves nor removes it reliably;
-  // `save` stores the draft, and Mail drops the compose when it quits.
+  // `save` stores the draft, and Mail drops the compose when it quits. Mail
+  // can store the compose more than once; mailctl finds the copies in the
+  // store afterwards.
   message.save();
   return Object.assign(summary, { sent: false });
 }

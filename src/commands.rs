@@ -2,7 +2,7 @@ use crate::catalog::{Catalog, Mailbox, SPECIAL_KINDS};
 use crate::cli::{Body, Command, Filters, FlagColor, Targets};
 use crate::output::{
     ActionReport, ActionResult, ActionStatus, AddressView, AttachmentView, ComposeReport,
-    MessageDetail, MessageView, Output,
+    MessageDetail, MessageView, Output, SavedDraft,
 };
 use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store, StoredCopy};
 use crate::{dates, emlx, permissions, scripting, version};
@@ -19,30 +19,19 @@ pub fn run(command: Command) -> Result<Output> {
     let command = match command {
         Command::Version => return Ok(Output::Version(version::info())),
         Command::Permissions { check } => return permissions::run(check),
-        // Composing needs neither the store nor the account catalog.
-        Command::Draft {
-            to,
-            cc,
-            bcc,
-            subject,
-            body,
-            from,
-            send,
-        } => {
-            return compose(
-                "draft",
-                json!({
-                    "op": "compose", "to": to, "cc": cc, "bcc": bcc, "subject": subject,
-                    "body": read_body(&body)?, "sender": from, "send": send,
-                }),
-            );
+        // Sending needs neither the store nor the account catalog.
+        Command::Draft { send: true, .. } => {
+            return compose(None, "draft", draft_request(command)?);
+        }
+        // Saving a draft works without Full Disk Access, as before mailctl
+        // looked for it in the store; its id is then unknown.
+        Command::Draft { .. } => {
+            let session = Session::open(false).ok();
+            return compose(session.as_ref(), "draft", draft_request(command)?);
         }
         command => command,
     };
-    let store = Store::open()?;
-    let refresh = matches!(command, Command::Accounts { refresh: true });
-    let catalog = Catalog::load(&store, refresh)?;
-    let session = Session { store, catalog };
+    let session = Session::open(matches!(command, Command::Accounts { refresh: true }))?;
 
     match command {
         Command::Version
@@ -84,6 +73,7 @@ pub fn run(command: Command) -> Result<Output> {
         } => {
             let target = session.location(&session.message(id)?)?;
             compose(
+                Some(&session),
                 "reply",
                 json!({ "op": "reply", "target": target, "all": all, "body": read_body(&body)?, "send": send }),
             )
@@ -91,6 +81,7 @@ pub fn run(command: Command) -> Result<Output> {
         Command::Forward { id, to, body, send } => {
             let target = session.location(&session.message(id)?)?;
             compose(
+                Some(&session),
                 "forward",
                 json!({ "op": "forward", "target": target, "to": to, "body": read_body(&body)?, "send": send }),
             )
@@ -160,6 +151,12 @@ enum Skip {
 }
 
 impl Session {
+    fn open(refresh: bool) -> Result<Self> {
+        let store = Store::open()?;
+        let catalog = Catalog::load(&store, refresh)?;
+        Ok(Self { store, catalog })
+    }
+
     fn mailboxes(&self, account: Option<&str>) -> Result<Output> {
         let account_id = account
             .map(|selector| self.catalog.account(selector))
@@ -694,10 +691,123 @@ impl Session {
         Ok((drafts, sent))
     }
 
+    /// Every Drafts mailbox and the messages already in them, taken before a
+    /// compose.
+    fn watch_drafts(&self) -> Result<DraftWatch> {
+        let mailboxes: Vec<i64> = self
+            .catalog
+            .mailboxes
+            .iter()
+            .filter(|mailbox| mailbox.kind == Some("drafts"))
+            .map(|mailbox| mailbox.id)
+            .collect();
+        // Mail stamps a draft when it stores it. The slack matches `send`;
+        // drafts already there are excluded by id.
+        let since = Local::now().timestamp() - 5;
+        let prior = self
+            .store
+            .messages(&MessageQuery {
+                mailboxes: Some(mailboxes.clone()),
+                ..MessageQuery::default()
+            })?
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        Ok(DraftWatch {
+            mailboxes,
+            since,
+            prior,
+        })
+    }
+
+    /// Waits until the drafts a compose created stop changing in the store,
+    /// and reports the newest one with the compose's sender and recipients as
+    /// the draft. Mail has already saved the draft, so nothing here fails the
+    /// command: a failed store read keeps what was seen before but restarts
+    /// the settle time.
+    fn find_draft(
+        &self,
+        watch: &DraftWatch,
+        compose: &ComposeResult,
+        settle: Duration,
+        timeout: Duration,
+    ) -> SavedDraft {
+        if watch.mailboxes.is_empty() {
+            return SavedDraft::default();
+        }
+        let deadline = Instant::now() + timeout;
+        let mut seen = None;
+        let mut unchanged_since = Instant::now();
+        loop {
+            match self.new_drafts(watch, compose) {
+                Ok(now) if seen.as_ref() == Some(&now) => {}
+                Ok(now) => {
+                    seen = Some(now);
+                    unchanged_since = Instant::now();
+                }
+                Err(_) => unchanged_since = Instant::now(),
+            }
+            let found = seen.as_ref().is_some_and(|draft| draft.id.is_some());
+            if found && unchanged_since.elapsed() >= settle {
+                let mut draft = seen.unwrap_or_default();
+                draft.confirmed = true;
+                return draft;
+            }
+            if Instant::now() >= deadline {
+                return seen.unwrap_or_default();
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    /// Drafts messages stored since the watch began, outside its prior ids,
+    /// with the compose's subject. The newest one with the compose's sender
+    /// and To and Cc addresses is the draft; the rest are copies. A copy may
+    /// carry another sender: Mail can store the compose before mailctl sets
+    /// the sender.
+    fn new_drafts(&self, watch: &DraftWatch, compose: &ComposeResult) -> Result<SavedDraft> {
+        let subject = compose.subject.as_deref().unwrap_or_default();
+        let sender = compose
+            .sender
+            .as_deref()
+            .map(bare_address)
+            .filter(|address| !address.is_empty());
+        let wanted = address_set(compose.to.iter().chain(&compose.cc).map(String::as_str));
+        // Newest first, as the store lists them.
+        let created: Vec<MessageRecord> = self
+            .with_subject(subject, &watch.mailboxes, Some(watch.since))?
+            .into_iter()
+            .filter(|record| !watch.prior.contains(&record.id))
+            .collect();
+        let id = created
+            .iter()
+            .find(|record| {
+                recipients(record) == wanted
+                    && sender.as_ref().is_none_or(|sender| {
+                        record
+                            .from
+                            .as_ref()
+                            .is_some_and(|from| bare_address(&from.address) == *sender)
+                    })
+            })
+            .map(|record| record.id);
+        let mut copies: Vec<i64> = created
+            .iter()
+            .map(|record| record.id)
+            .filter(|copy| Some(*copy) != id)
+            .collect();
+        copies.sort_unstable();
+        Ok(SavedDraft {
+            id,
+            confirmed: false,
+            copies,
+        })
+    }
+
     /// Ids of messages in `drafts` with the draft's subject, the draft included.
     fn drafts_like(&self, draft: &MessageRecord, drafts: i64) -> Result<Vec<i64>> {
         Ok(self
-            .with_subject(&draft.subject, drafts, None)?
+            .with_subject(&draft.subject, &[drafts], None)?
             .into_iter()
             .map(|record| record.id)
             .collect())
@@ -713,7 +823,7 @@ impl Session {
         prior: &[i64],
     ) -> Result<Vec<i64>> {
         Ok(self
-            .with_subject(&draft.subject, sent, Some(since))?
+            .with_subject(&draft.subject, &[sent], Some(since))?
             .into_iter()
             .filter(|record| !prior.contains(&record.id) && same_message(draft, record))
             .map(|record| record.id)
@@ -723,11 +833,11 @@ impl Session {
     fn with_subject(
         &self,
         subject: &str,
-        mailbox: i64,
+        mailboxes: &[i64],
         since: Option<i64>,
     ) -> Result<Vec<MessageRecord>> {
         let mut records = self.store.messages(&MessageQuery {
-            mailboxes: Some(vec![mailbox]),
+            mailboxes: Some(mailboxes.to_vec()),
             subject: Some(subject.to_string()),
             since,
             ..MessageQuery::default()
@@ -881,20 +991,21 @@ const DRAFT_REMOVAL_WAIT: Duration = Duration::from_secs(5);
 
 /// Whether a stored message has the draft's subject and To and Cc addresses.
 fn same_message(draft: &MessageRecord, candidate: &MessageRecord) -> bool {
-    let addresses = |record: &MessageRecord| {
-        let mut addresses: Vec<String> = record
+    draft.subject == candidate.subject && recipients(draft) == recipients(candidate)
+}
+
+/// A stored message's To and Cc addresses, for comparing recipient sets.
+fn recipients(record: &MessageRecord) -> Vec<String> {
+    address_set(
+        record
             .to
             .iter()
             .chain(&record.cc)
-            .map(|address| address.address.to_lowercase())
-            .collect();
-        addresses.sort_unstable();
-        addresses
-    };
-    draft.subject == candidate.subject && addresses(draft) == addresses(candidate)
+            .map(|address| address.address.as_str()),
+    )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ComposeResult {
     #[serde(default)]
     subject: Option<String>,
@@ -902,18 +1013,87 @@ struct ComposeResult {
     sender: Option<String>,
     #[serde(default)]
     to: Vec<String>,
+    #[serde(default)]
+    cc: Vec<String>,
     sent: bool,
 }
 
-fn compose(action: &str, request: serde_json::Value) -> Result<Output> {
+/// Drafts messages that existed before a compose, so they are never taken
+/// for the new draft or its copies.
+struct DraftWatch {
+    mailboxes: Vec<i64>,
+    /// The new draft is stored at or after this time.
+    since: i64,
+    prior: HashSet<i64>,
+}
+
+/// How long the new draft and its copies must stay unchanged in the store
+/// before the draft id counts as confirmed.
+/// Exchange has taken about ten seconds to file a change.
+const DRAFT_SETTLE: Duration = Duration::from_secs(10);
+
+/// How long a compose waits for the store to settle.
+const DRAFT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Runs a compose request. A saved draft is looked for in the store when the
+/// store can be read, and reported unconfirmed without an id otherwise.
+fn compose(session: Option<&Session>, action: &str, request: serde_json::Value) -> Result<Output> {
+    let sending = request["send"].as_bool() == Some(true);
+    let watch = match session {
+        Some(session) if !sending => session.watch_drafts().ok(),
+        _ => None,
+    };
     let result: ComposeResult = scripting::call(&request)?;
+    let draft = match (session, watch) {
+        _ if result.sent => None,
+        (Some(session), Some(watch)) => {
+            Some(session.find_draft(&watch, &result, DRAFT_SETTLE, DRAFT_TIMEOUT))
+        }
+        _ => Some(SavedDraft::default()),
+    };
     Ok(Output::Composed(ComposeReport {
         action: action.to_string(),
         subject: result.subject.unwrap_or_default(),
         sender: result.sender.unwrap_or_default(),
         to: result.to,
         sent: result.sent,
+        draft,
     }))
+}
+
+fn draft_request(command: Command) -> Result<serde_json::Value> {
+    let Command::Draft {
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        from,
+        send,
+    } = command
+    else {
+        unreachable!("only draft commands build a draft request")
+    };
+    Ok(json!({
+        "op": "compose", "to": to, "cc": cc, "bcc": bcc, "subject": subject,
+        "body": read_body(&body)?, "sender": from, "send": send,
+    }))
+}
+
+/// The address in `Name <address>`, or the whole text, lowercased.
+fn bare_address(text: &str) -> String {
+    let inner = match (text.rfind('<'), text.rfind('>')) {
+        (Some(start), Some(end)) if start < end => &text[start + 1..end],
+        _ => text,
+    };
+    inner.trim().to_lowercase()
+}
+
+/// To and Cc addresses, lowercased and sorted, for comparing recipient sets.
+fn address_set<'a>(addresses: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut addresses: Vec<String> = addresses.into_iter().map(bare_address).collect();
+    addresses.sort_unstable();
+    addresses
 }
 
 fn read_body(body: &Body) -> Result<String> {
@@ -988,8 +1168,30 @@ mod tests {
         }
     }
 
+    /// Drafts stored after drafts 200 and 201, in Drafts (7): 206 and 207
+    /// are identical saves to the landlord, 208 is a newer save without
+    /// recipients, 209 has another sender, 210 another subject, and 211 an
+    /// older date.
+    const NEW_DRAFTS: &str = "
+        INSERT INTO message_global_data VALUES (11, '<n1@x>'), (12, '<n2@x>'),
+            (13, '<n3@x>'), (14, '<n4@x>'), (15, '<n5@x>'), (16, '<n6@x>');
+        INSERT INTO messages VALUES
+            (206, 11, 3, NULL, 4, NULL, 8000, 8000, 7, 0, 1, 0, 0, 10, 30),
+            (207, 12, 3, NULL, 4, NULL, 8000, 8000, 7, 0, 1, 0, 0, 10, 30),
+            (208, 13, 3, NULL, 4, NULL, 8001, 8001, 7, 0, 1, 0, 0, 10, 30),
+            (209, 14, 1, NULL, 4, NULL, 8000, 8000, 7, 0, 1, 0, 0, 10, 30),
+            (210, 15, 3, NULL, 3, NULL, 8000, 8000, 7, 0, 1, 0, 0, 10, 30),
+            (211, 16, 3, NULL, 4, NULL, 4000, 4000, 7, 0, 1, 0, 0, 10, 30);
+        INSERT INTO recipients VALUES (20, 206, 1, 0, 0), (21, 207, 1, 0, 0),
+            (22, 209, 1, 0, 0), (23, 210, 1, 0, 0), (24, 211, 1, 0, 0);
+    ";
+
     fn session() -> (tempfile::TempDir, Session) {
-        let (root, store) = fixture_with(SEND_FIXTURE);
+        session_with("")
+    }
+
+    fn session_with(extra: &str) -> (tempfile::TempDir, Session) {
+        let (root, store) = fixture_with(&format!("{SEND_FIXTURE}{extra}"));
         let accounts = vec![
             account(
                 "EWS",
@@ -1051,6 +1253,157 @@ mod tests {
         session.confirm_moves(&steps, &mut results).unwrap();
         assert_eq!(results[0].new_id, Some(213));
         assert_eq!(results[1].new_id, Some(212));
+    }
+
+    #[test]
+    fn watches_every_drafts_mailbox() {
+        let (_root, session) = session_with(NEW_DRAFTS);
+        let watch = session.watch_drafts().unwrap();
+        assert_eq!(watch.mailboxes, vec![7, 15]);
+        // Gmail draft 205 is stored in All Mail with the Drafts label.
+        for id in [200, 201, 205, 206, 211] {
+            assert!(watch.prior.contains(&id), "{id} is a prior draft");
+        }
+    }
+
+    #[test]
+    fn finds_the_new_draft_and_its_copies() {
+        let (_root, session) = session_with(NEW_DRAFTS);
+        // As if 200, 201, and 205 were there before the compose.
+        let watch = DraftWatch {
+            mailboxes: vec![7, 15],
+            since: 5000,
+            prior: HashSet::from([200, 201, 205]),
+        };
+        let compose = |to: &str| ComposeResult {
+            subject: Some("Agenda".into()),
+            sender: Some("Me <ME@example.edu>".into()),
+            to: vec![to.into()],
+            ..ComposeResult::default()
+        };
+        let find = |compose: &ComposeResult, settle| {
+            session.find_draft(&watch, compose, settle, Duration::ZERO)
+        };
+        let saved = |confirmed| SavedDraft {
+            id: Some(207),
+            confirmed,
+            copies: vec![206, 208, 209],
+        };
+
+        // The newest save with the sender and recipients is the draft; other
+        // new saves with the subject are copies, whatever their sender or
+        // recipients.
+        let landlord = compose("Landlord@example.com");
+        assert_eq!(find(&landlord, Duration::ZERO), saved(true));
+        // Still within the settle time at the deadline: unconfirmed.
+        assert_eq!(find(&landlord, Duration::from_secs(60)), saved(false));
+
+        // No save with the recipients: no id, and every save is a copy.
+        assert_eq!(
+            find(&compose("someone@example.com"), Duration::ZERO),
+            SavedDraft {
+                id: None,
+                confirmed: false,
+                copies: vec![206, 207, 208, 209],
+            }
+        );
+
+        let nowhere = DraftWatch {
+            mailboxes: Vec::new(),
+            since: 5000,
+            prior: HashSet::new(),
+        };
+        assert_eq!(
+            session.find_draft(&nowhere, &landlord, Duration::ZERO, Duration::from_secs(60)),
+            SavedDraft::default()
+        );
+        assert_eq!(bare_address("Me <ME@example.edu>"), "me@example.edu");
+        assert_eq!(bare_address(" a@example.com "), "a@example.com");
+    }
+
+    #[test]
+    fn waits_for_late_saves_before_confirming() {
+        let (root, session) = session_with(NEW_DRAFTS);
+        let watch = DraftWatch {
+            mailboxes: vec![7],
+            since: 5000,
+            prior: HashSet::from([200, 201]),
+        };
+        let compose = ComposeResult {
+            subject: Some("Agenda".into()),
+            sender: Some("me@example.edu".into()),
+            to: vec!["landlord@example.com".into()],
+            ..ComposeResult::default()
+        };
+        // Mail stores another save, renumbered as 214, after the first poll.
+        let writer =
+            rusqlite::Connection::open(root.path().join("MailData/Envelope Index")).unwrap();
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            writer
+                .execute_batch(
+                    "INSERT INTO message_global_data VALUES (17, '<n7@x>');
+                     INSERT INTO messages VALUES
+                         (214, 17, 3, NULL, 4, NULL, 8002, 8002, 7, 0, 1, 0, 0, 10, 30);
+                     INSERT INTO recipients VALUES (25, 214, 1, 0, 0);",
+                )
+                .unwrap();
+        });
+        let draft = session.find_draft(
+            &watch,
+            &compose,
+            Duration::from_secs(1),
+            Duration::from_secs(10),
+        );
+        late.join().unwrap();
+        assert_eq!(
+            draft,
+            SavedDraft {
+                id: Some(214),
+                confirmed: true,
+                copies: vec![206, 207, 208, 209],
+            }
+        );
+    }
+
+    #[test]
+    fn store_errors_leave_the_draft_unconfirmed() {
+        let (root, session) = session_with(NEW_DRAFTS);
+        let watch = DraftWatch {
+            mailboxes: vec![7],
+            since: 5000,
+            prior: HashSet::from([200, 201]),
+        };
+        let compose = ComposeResult {
+            subject: Some("Agenda".into()),
+            sender: Some("me@example.edu".into()),
+            to: vec!["landlord@example.com".into()],
+            ..ComposeResult::default()
+        };
+        // Every read after the first one fails.
+        let writer =
+            rusqlite::Connection::open(root.path().join("MailData/Envelope Index")).unwrap();
+        let broken = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            writer
+                .execute_batch("ALTER TABLE messages RENAME TO gone;")
+                .unwrap();
+        });
+        let draft = session.find_draft(
+            &watch,
+            &compose,
+            Duration::from_secs(2),
+            Duration::from_secs(3),
+        );
+        broken.join().unwrap();
+        assert_eq!(
+            draft,
+            SavedDraft {
+                id: Some(207),
+                confirmed: false,
+                copies: vec![206, 208, 209],
+            }
+        );
     }
 
     #[test]
