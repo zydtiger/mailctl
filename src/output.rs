@@ -142,7 +142,8 @@ pub struct PermissionReport {
     pub full_disk_access: PermissionStatus,
     /// Permission to control Mail.
     pub automation: PermissionStatus,
-    /// Permission to drive Outlook; only `meeting` needs it.
+    /// Permission to drive Outlook and Mail's Send Later; only `meeting` and
+    /// `send --at` need it.
     pub accessibility: PermissionStatus,
 }
 
@@ -250,7 +251,7 @@ impl Output {
                 writeln!(out, "Automation:       {}", report.automation.name())?;
                 writeln!(
                     out,
-                    "Accessibility:    {} (meeting only)",
+                    "Accessibility:    {} (meeting, send --at)",
                     report.accessibility.name()
                 )
             }
