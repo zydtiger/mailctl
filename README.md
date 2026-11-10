@@ -113,6 +113,12 @@ mailctl meeting create --subject "Sync" --start 2026-11-20T15:00 \
   --end 2026-11-20T15:30 --attendee a@example.edu --dry-run
 ```
 
+`draft`, `reply`, and `forward` with `--send` refuse to send, and send
+nothing, when Mail holds another outgoing message with the same subject and
+recipients or the composed text does not begin with the requested body; quit
+and reopen Mail to clear held composes. For important mail, save a draft,
+review it, and send it with `mailctl send <id>`.
+
 Run `mailctl help <command>` for every option. [SKILL.md](SKILL.md) documents
 mailbox selection, JSON fields, and the rules an agent follows before writing.
 

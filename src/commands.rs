@@ -6,7 +6,7 @@ use crate::output::{
 };
 use crate::store::{AddressRecord, MessageQuery, MessageRecord, Store, StoredCopy};
 use crate::{dates, emlx, meeting, permissions, scripting, version};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Local;
 use mail_parser::{MessageParser, html_to_text};
 use serde::{Deserialize, Serialize};
@@ -1076,7 +1076,95 @@ struct ComposeResult {
     to: Vec<String>,
     #[serde(default)]
     cc: Vec<String>,
+    #[serde(default)]
     sent: bool,
+    /// What `--send` checks before Mail is asked to send.
+    #[serde(default)]
+    check: Option<ComposeCheck>,
+}
+
+/// The composed outgoing message as Mail reads it back, and the other
+/// outgoing messages Mail holds.
+#[derive(Debug, Default, Deserialize)]
+struct ComposeCheck {
+    id: i64,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    others: Vec<HeldCompose>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HeldCompose {
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    to: Vec<String>,
+    #[serde(default)]
+    cc: Vec<String>,
+}
+
+/// The id of the outgoing message a compose with `--send` may send, or why
+/// it must not be sent. Mail has sent a held compose with the same subject
+/// and recipients in place of the one mailctl composed.
+fn send_check(body: &str, result: &ComposeResult) -> Result<i64, &'static str> {
+    let Some(check) = &result.check else {
+        return Err("Mail did not report the composed message");
+    };
+    let recipients =
+        |to: &[String], cc: &[String]| address_set(to.iter().chain(cc).map(String::as_str));
+    let own = recipients(&result.to, &result.cc);
+    if check
+        .others
+        .iter()
+        .any(|other| other.subject == result.subject && recipients(&other.to, &other.cc) == own)
+    {
+        return Err(
+            "Mail holds another outgoing message with this subject and these recipients, \
+             which it can send in place of the new one; quit and reopen Mail, then try again",
+        );
+    }
+    if !begins_with(&check.content, body) {
+        return Err(
+            "the message Mail composed does not begin with the requested body; \
+             quit and reopen Mail, then try again",
+        );
+    }
+    Ok(check.id)
+}
+
+/// Whether `content` begins with `body` as a whole paragraph, tolerating the
+/// line endings, non-breaking spaces, and trailing whitespace Mail rewrites.
+fn begins_with(content: &str, body: &str) -> bool {
+    fn normalized(text: &str) -> String {
+        let text = text
+            .replace("\r\n", "\n")
+            .replace(['\r', '\u{2028}', '\u{2029}'], "\n");
+        let lines: Vec<&str> = text.split('\n').map(str::trim_end).collect();
+        lines.join("\n").replace('\u{a0}', " ").trim().to_string()
+    }
+    let body = normalized(body);
+    normalized(content)
+        .strip_prefix(&body)
+        .is_some_and(|rest| body.is_empty() || rest.is_empty() || rest.starts_with('\n'))
+}
+
+/// Asks Mail to send the outgoing message a compose checked. Once Mail was
+/// asked, no error claims that nothing was sent.
+fn send_composed(id: i64) -> Result<()> {
+    const CHECK: &str = "check the Sent mailbox and Outbox before trying again";
+    match scripting::call::<SendResult>(&json!({ "op": "sendComposed", "id": id })) {
+        Ok(SendResult {
+            refused: Some(reason),
+            ..
+        }) => bail!("{reason}; nothing was sent"),
+        Ok(SendResult { sent: true, .. }) => Ok(()),
+        Ok(SendResult { error, .. }) => {
+            let reason = error.map(|error| format!(" ({error})")).unwrap_or_default();
+            bail!("Mail did not confirm the send{reason}; {CHECK}")
+        }
+        Err(error) => bail!("the send request failed after it reached Mail ({error:#}); {CHECK}"),
+    }
 }
 
 /// Drafts messages that existed before a compose, so they are never taken
@@ -1104,7 +1192,21 @@ fn compose(session: Option<&Session>, action: &str, request: serde_json::Value) 
         Some(session) if !sending => session.watch_drafts().ok(),
         _ => None,
     };
-    let result: ComposeResult = scripting::call(&request)?;
+    let mut result: ComposeResult = scripting::call(&request).map_err(|error| {
+        if sending {
+            error.context("nothing was sent")
+        } else {
+            error
+        }
+    })?;
+    if sending {
+        let body = request["body"].as_str().unwrap_or_default();
+        match send_check(body, &result) {
+            Ok(id) => send_composed(id)?,
+            Err(reason) => bail!("{reason}; nothing was sent"),
+        }
+        result.sent = true;
+    }
     let draft = match (session, watch) {
         _ if result.sent => None,
         (Some(session), Some(watch)) => {
@@ -1616,5 +1718,82 @@ mod tests {
             assert!(result.error.unwrap().contains(expected));
             assert_eq!(leftovers, None);
         }
+    }
+
+    /// A reply composed for sending, as the bridge reports it.
+    fn composed(content: &str, others: Vec<HeldCompose>) -> ComposeResult {
+        ComposeResult {
+            subject: Some("Re: Ref".into()),
+            to: vec!["Landlord <Landlord@example.com>".into()],
+            check: Some(ComposeCheck {
+                id: 42,
+                content: content.into(),
+                others,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn held(subject: &str, to: &str, cc: &[&str]) -> HeldCompose {
+        HeldCompose {
+            subject: Some(subject.into()),
+            to: vec![to.into()],
+            cc: cc.iter().map(|address| address.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn compose_send_refuses_a_held_compose_on_the_thread() {
+        let content = "New text\n\nOn Nov 10, 2026, 9:00 AM, Landlord wrote:\n> Hi";
+        let result = composed(content, vec![held("Re: Ref", "landlord@example.com", &[])]);
+        assert!(
+            send_check("New text", &result)
+                .unwrap_err()
+                .contains("quit and reopen Mail")
+        );
+        // Another subject or other recipients do not block the send.
+        for other in [
+            held("Re: Other", "landlord@example.com", &[]),
+            held("Re: Ref", "someone@example.com", &[]),
+            held("Re: Ref", "landlord@example.com", &["cc@example.com"]),
+        ] {
+            assert_eq!(
+                send_check("New text", &composed(content, vec![other])),
+                Ok(42)
+            );
+        }
+    }
+
+    #[test]
+    fn compose_send_refuses_content_without_the_requested_body() {
+        // The stale send: an older reply on top, the requested text quoted.
+        let stale = "Old reply\n\nOn Nov 8, 2026 at 3:22 PM, Landlord wrote:\n> New text";
+        assert!(
+            send_check("New text", &composed(stale, vec![]))
+                .unwrap_err()
+                .contains("requested body")
+        );
+        // The body must be a whole paragraph, not a prefix of another one.
+        assert!(send_check("Yes", &composed("Yesterday\n\n> Hi", vec![])).is_err());
+        let missing = ComposeResult {
+            check: None,
+            ..composed("", vec![])
+        };
+        assert!(send_check("", &missing).is_err());
+    }
+
+    #[test]
+    fn compose_send_tolerates_mail_rewriting_the_body() {
+        let content = "First line \r\nSecond\u{a0}line\r\n\r\nOn Nov 10, 2026, 9:00 AM, Landlord wrote:\r\n> Hi";
+        let body = "First line\nSecond line\n";
+        assert_eq!(send_check(body, &composed(content, vec![])), Ok(42));
+        assert_eq!(
+            send_check("Only body", &composed("Only body\n", vec![])),
+            Ok(42)
+        );
+        assert_eq!(
+            send_check("", &composed("On Nov 10 wrote:\n> Hi", vec![])),
+            Ok(42)
+        );
     }
 }

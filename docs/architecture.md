@@ -88,6 +88,22 @@ message, and an XML property list.
   removed the draft, with no autosaved copies. Without a held compose,
   `send` opens the draft, as a double-click does, and sends the new compose;
   that path has not been checked against a live send.
+- `reply --send` once returned success but sent a compose Mail had held since
+  an earlier `reply` on the same thread two days before, whose draft the user
+  had since sent from Mail: the
+  sent body was the old reply, with the requested text inside the quote and
+  attributions in Mail's own "Nov 8, 2026 at 3:22 PM" format, which mailctl
+  never writes. Whether the scripting specifier resolved to the held compose
+  or Mail merged the two is unconfirmed. `draft`, `reply`, and `forward` with
+  `--send` therefore compose in one bridge request and send in a second:
+  the first returns the new outgoing message's id and content and the
+  subject, To, and Cc of every other outgoing message, without sending.
+  mailctl refuses when another one has the same subject and To and Cc
+  addresses, or when the content does not begin with the requested body as a
+  whole paragraph, after normalizing line endings, non-breaking spaces, and
+  trailing whitespace. Otherwise the second request sends the outgoing
+  message by id. A refused compose stays held, so the next `--send` on that
+  thread is refused too until Mail quits.
 - Every draft save, including Mail's autosaves, stores a new message with a
   new Message-ID, and the sent copy gets another. `send` therefore confirms by
   subject and To and Cc addresses among Sent messages that were not there
