@@ -259,10 +259,25 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
   adds a forwarded-message header and the original text body. Forwards do not
   include the original's attachments; tell the user to forward from Mail when
   attachments matter.
-- Bodies are plain text.
+- Bodies are plain text. Mail wraps every body mailctl writes in a quote
+  styled to look like ordinary text, so HTML mail clients show it normally,
+  but the plain-text part of the sent message prefixes each line with `> `.
+  When that matters, tell the user to write the message in Mail itself.
 - `--send` sends immediately. Follow the operating rule above. If a send
   reports that Mail did not confirm it, check the Sent mailbox before trying
   again; never resend blindly.
+- Before sending, `--send` reads the composed message back from Mail and
+  refuses, with an error saying "nothing was sent" and a nonzero exit, when
+  Mail holds another outgoing message with the same subject and To and Cc
+  addresses, when it cannot read the outgoing messages Mail holds, or when
+  the composed text does not begin with the requested body. Mail has sent
+  such a held compose in place of a new reply. Mail holds every unsent
+  compose mailctl created, including saved drafts, until it quits, so after
+  saving a draft, `--send` on the same subject and recipients is refused
+  until the user quits and reopens Mail; never quit Mail for them. A refused
+  message can appear in Drafts as Mail's autosave; tell the user, and never
+  send it without approval. For important mail, save a draft without
+  `--send`, show it to the user, and send it with `mailctl send <id>`.
 
 ## Sending Drafts
 

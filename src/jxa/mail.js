@@ -65,7 +65,7 @@ const handlers = {
     Mail.outgoingMessages.push(message);
     if (request.sender) message.sender = request.sender;
     addRecipients(Mail, message, request);
-    return finish(message, request.send);
+    return finish(Mail, message, request.send);
   },
 
   // Mail sends only outgoing messages. Mail keeps the compose of a draft it
@@ -97,11 +97,20 @@ const handlers = {
     } catch (error) {
       return { refused: String(error) };
     }
+    return sendOutgoing(message);
+  },
+
+  // Sends an outgoing message that `draft`, `reply`, or `forward` composed
+  // with `--send`, after mailctl has checked what `finish` reported about it.
+  sendComposed(Mail, request) {
+    let message;
     try {
-      return { sent: Boolean(message.send()) };
+      message = Mail.outgoingMessages.byId(request.id);
+      message.id(); // Fails here when Mail no longer holds it.
     } catch (error) {
-      return { sent: false, error: String(error) };
+      return { refused: String(error) };
     }
+    return sendOutgoing(message);
   },
 
   // Schedules a draft with Mail's Send Later, which scripting does not offer:
@@ -185,7 +194,7 @@ const handlers = {
       .join("\n");
     const attribution = `On ${formatDate(original.dateSent())}, ${original.sender()} wrote:`;
     message.content = join(request.body, attribution + "\n" + quoted);
-    return finish(message, request.send);
+    return finish(Mail, message, request.send);
   },
 
   forward(Mail, request) {
@@ -200,7 +209,7 @@ const handlers = {
       "To: " + original.toRecipients().map((recipient) => recipient.address()).join(", "),
     ].join("\n");
     message.content = join(request.body, header + "\n\n" + original.content());
-    return finish(message, request.send);
+    return finish(Mail, message, request.send);
   },
 };
 
@@ -332,7 +341,9 @@ function formatDate(date) {
   return date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
-function finish(message, send) {
+// With `send`, the message is not sent here: mailctl first checks its content
+// and the other outgoing messages Mail holds, then asks for `sendComposed`.
+function finish(Mail, message, send) {
   const summary = {
     subject: message.subject(),
     sender: message.sender(),
@@ -340,11 +351,22 @@ function finish(message, send) {
     cc: message.ccRecipients().map((recipient) => recipient.address()),
   };
   if (send) {
-    // Never report a plain failure here: Mail may have sent it anyway.
-    if (!message.send()) {
-      throw new Error("Mail did not confirm the send; check the Sent mailbox before trying again");
+    // The content is read by id, as `sendComposed` addresses the message.
+    const id = message.id();
+    const content = Mail.outgoingMessages.byId(id).content();
+    let others;
+    try {
+      others = Mail.outgoingMessages()
+        .filter((other) => other.id() !== id)
+        .map((other) => ({
+          subject: other.subject(),
+          to: other.toRecipients().map((recipient) => recipient.address()),
+          cc: other.ccRecipients().map((recipient) => recipient.address()),
+        }));
+    } catch (error) {
+      throw new Error(`could not read the outgoing messages Mail holds (${error}); quit and reopen Mail, then try again`);
     }
-    return Object.assign(summary, { sent: true });
+    return Object.assign(summary, { sent: false, check: { id, content, others } });
   }
   // Closing an invisible compose neither saves nor removes it reliably;
   // `save` stores the draft, and Mail drops the compose when it quits. Mail
@@ -352,4 +374,13 @@ function finish(message, send) {
   // store afterwards.
   message.save();
   return Object.assign(summary, { sent: false });
+}
+
+// `refused` would be wrong once `send` is called: Mail may have sent anyway.
+function sendOutgoing(message) {
+  try {
+    return { sent: Boolean(message.send()) };
+  } catch (error) {
+    return { sent: false, error: String(error) };
+  }
 }
