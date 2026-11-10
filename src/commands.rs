@@ -1133,7 +1133,7 @@ fn send_check(body: &str, result: &ComposeResult) -> Result<i64, &'static str> {
     Ok(check.id)
 }
 
-/// Whether `content` begins with `body` as a whole paragraph, tolerating the
+/// Whether `content` begins with `body` as whole lines, tolerating the
 /// line endings, non-breaking spaces, and trailing whitespace Mail rewrites.
 fn begins_with(content: &str, body: &str) -> bool {
     fn normalized(text: &str) -> String {
@@ -1773,7 +1773,7 @@ mod tests {
                 .unwrap_err()
                 .contains("requested body")
         );
-        // The body must be a whole paragraph, not a prefix of another one.
+        // The body must end at a line break, not inside a line.
         assert!(send_check("Yes", &composed("Yesterday\n\n> Hi", vec![])).is_err());
         let missing = ComposeResult {
             check: None,

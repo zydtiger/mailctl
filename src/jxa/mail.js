@@ -351,15 +351,22 @@ function finish(Mail, message, send) {
     cc: message.ccRecipients().map((recipient) => recipient.address()),
   };
   if (send) {
+    // The content is read by id, as `sendComposed` addresses the message.
     const id = message.id();
-    const others = Mail.outgoingMessages()
-      .filter((other) => other.id() !== id)
-      .map((other) => ({
-        subject: other.subject(),
-        to: other.toRecipients().map((recipient) => recipient.address()),
-        cc: other.ccRecipients().map((recipient) => recipient.address()),
-      }));
-    return Object.assign(summary, { sent: false, check: { id, content: message.content(), others } });
+    const content = Mail.outgoingMessages.byId(id).content();
+    let others;
+    try {
+      others = Mail.outgoingMessages()
+        .filter((other) => other.id() !== id)
+        .map((other) => ({
+          subject: other.subject(),
+          to: other.toRecipients().map((recipient) => recipient.address()),
+          cc: other.ccRecipients().map((recipient) => recipient.address()),
+        }));
+    } catch (error) {
+      throw new Error(`could not read the outgoing messages Mail holds (${error}); quit and reopen Mail, then try again`);
+    }
+    return Object.assign(summary, { sent: false, check: { id, content, others } });
   }
   // Closing an invisible compose neither saves nor removes it reliably;
   // `save` stores the draft, and Mail drops the compose when it quits. Mail

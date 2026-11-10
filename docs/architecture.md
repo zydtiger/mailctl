@@ -96,14 +96,17 @@ message, and an XML property list.
   never writes. Whether the scripting specifier resolved to the held compose
   or Mail merged the two is unconfirmed. `draft`, `reply`, and `forward` with
   `--send` therefore compose in one bridge request and send in a second:
-  the first returns the new outgoing message's id and content and the
-  subject, To, and Cc of every other outgoing message, without sending.
-  mailctl refuses when another one has the same subject and To and Cc
-  addresses, or when the content does not begin with the requested body as a
-  whole paragraph, after normalizing line endings, non-breaking spaces, and
-  trailing whitespace. Otherwise the second request sends the outgoing
-  message by id. A refused compose stays held, so the next `--send` on that
-  thread is refused too until Mail quits.
+  the first returns the new outgoing message's id, its content read back by
+  that id, and the subject, To, and Cc of every other outgoing message,
+  without sending. mailctl refuses when another one has the same subject and
+  To and Cc addresses, when one cannot be read, or when the content does not
+  begin with the requested body as whole lines, after normalizing line
+  endings, non-breaking spaces, and trailing whitespace. Otherwise the second
+  request sends the outgoing message by that id, so the checked message and
+  the sent one are the same scripting object. The content check cannot see a
+  merge Mail makes only while sending, and ids staying stable across the two
+  `osascript` runs has not been checked live. A refused compose stays held, so
+  the next `--send` on that thread is refused too until Mail quits.
 - Every draft save, including Mail's autosaves, stores a new message with a
   new Message-ID, and the sent copy gets another. `send` therefore confirms by
   subject and To and Cc addresses among Sent messages that were not there

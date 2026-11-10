@@ -264,10 +264,10 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
   reports that Mail did not confirm it, check the Sent mailbox before trying
   again; never resend blindly.
 - Before sending, `--send` reads the composed message back from Mail and
-  refuses, with an error ending in "nothing was sent" and a nonzero exit,
-  when Mail holds another outgoing message with the same subject and To and
-  Cc addresses, or when the composed text does not begin with the requested
-  body. Mail has sent such a held compose in place of the new reply. Mail
+  refuses, with an error saying "nothing was sent" and a nonzero exit, when
+  Mail holds another outgoing message with the same subject and To and Cc
+  addresses, when it cannot read the outgoing messages Mail holds, or when
+  the composed text does not begin with the requested body. Mail has sent such a held compose in place of the new reply. Mail
   holds every compose mailctl created, saved or sent, until it quits, so a
   second `--send` on the same thread is refused until the user quits and
   reopens Mail; never quit Mail for them. For important mail, save a draft
