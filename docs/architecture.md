@@ -88,25 +88,41 @@ message, and an XML property list.
   removed the draft, with no autosaved copies. Without a held compose,
   `send` opens the draft, as a double-click does, and sends the new compose;
   that path has not been checked against a live send.
-- `reply --send` once returned success but sent a compose Mail had held since
-  an earlier `reply` on the same thread two days before, whose draft the user
-  had since sent from Mail: the
-  sent body was the old reply, with the requested text inside the quote and
-  attributions in Mail's own "Nov 8, 2026 at 3:22 PM" format, which mailctl
-  never writes. Whether the scripting specifier resolved to the held compose
-  or Mail merged the two is unconfirmed. `draft`, `reply`, and `forward` with
-  `--send` therefore compose in one bridge request and send in a second:
-  the first returns the new outgoing message's id, its content read back by
-  that id, and the subject, To, and Cc of every other outgoing message,
-  without sending. mailctl refuses when another one has the same subject and
-  To and Cc addresses, when one cannot be read, or when the content does not
-  begin with the requested body as whole lines, after normalizing line
-  endings, non-breaking spaces, and trailing whitespace. Otherwise the second
-  request sends the outgoing message by that id, so the checked message and
-  the sent one are the same scripting object. The content check cannot see a
-  merge Mail makes only while sending, and ids staying stable across the two
-  `osascript` runs has not been checked live. A refused compose stays held, so
-  the next `--send` on that thread is refused too until Mail quits.
+- `reply --send` once returned success but sent the wrong body: Mail had
+  held, since an earlier `reply` on the same thread two days before, a
+  compose whose draft the user had then sent from Mail, and the new send
+  carried that old reply on top with the requested text quoted below it.
+  How the old text got there is unconfirmed. Its "Nov 8, 2026 at 3:22 PM"
+  attributions are mailctl's own: on macOS 26, `formatDate`
+  (`toLocaleString` with medium date and short time) writes "at".
+  `draft`, `reply`, and `forward` with `--send` therefore compose in one
+  bridge request and send in a second. The first returns the new outgoing
+  message's id, its content read back by that id, and the subject, To, and
+  Cc of every other outgoing message, without sending. mailctl refuses when
+  another one has the same subject and To and Cc addresses, when one cannot
+  be read, or when the content does not begin with the requested body as
+  whole lines, after normalizing line endings, non-breaking spaces, and
+  trailing whitespace. Otherwise the second request sends the outgoing
+  message by that id. The content check cannot see what Mail adds only while
+  sending.
+- Checked live on Exchange on 2026-11-10, self-addressed:
+  - Outgoing message ids stayed stable across separate `osascript` runs, and
+    sending by id worked for `draft`, `reply`, and `forward`.
+  - A saved, unsent `draft` or `reply` compose stays in `outgoing messages`,
+    so a later `--send` with its subject and recipients is refused. A
+    compose created by `make` stays there after it is sent; a `reply` or
+    `forward` compose does not, so a sent reply never blocks the next one.
+  - Reading `content` of a new reply compose before setting it makes Mail
+    ignore the assignment: `content` stays empty, also when read later.
+    The bridge never reads it first; the content check refuses that case.
+  - Mail autosaves an invisible compose that was neither saved nor sent,
+    including a refused one, to Drafts within seconds, with or without its
+    recipients.
+  - A sent reply or forward wraps the whole content mailctl set, body
+    included, in a `blockquote type="cite"` styled without a quote bar,
+    after an empty top `div`. The HTML part reads as unquoted text, but the
+    `text/plain` part prefixes every line with `> `. The saved draft has no
+    such wrapper. Replies sent with mailctl 0.3.0 have the same structure.
 - Every draft save, including Mail's autosaves, stores a new message with a
   new Message-ID, and the sent copy gets another. `send` therefore confirms by
   subject and To and Cc addresses among Sent messages that were not there

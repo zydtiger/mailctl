@@ -267,11 +267,14 @@ mailctl forward 76037 --to c@example.com --body "FYI" --json
   refuses, with an error saying "nothing was sent" and a nonzero exit, when
   Mail holds another outgoing message with the same subject and To and Cc
   addresses, when it cannot read the outgoing messages Mail holds, or when
-  the composed text does not begin with the requested body. Mail has sent such a held compose in place of the new reply. Mail
-  holds every compose mailctl created, saved or sent, until it quits, so a
-  second `--send` on the same thread is refused until the user quits and
-  reopens Mail; never quit Mail for them. For important mail, save a draft
-  without `--send`, show it to the user, and send it with `mailctl send <id>`.
+  the composed text does not begin with the requested body. Mail has sent
+  such a held compose in place of a new reply. Mail holds every unsent
+  compose mailctl created, including saved drafts, until it quits, so after
+  saving a draft, `--send` on the same subject and recipients is refused
+  until the user quits and reopens Mail; never quit Mail for them. A refused
+  message can appear in Drafts as Mail's autosave; tell the user, and never
+  send it without approval. For important mail, save a draft without
+  `--send`, show it to the user, and send it with `mailctl send <id>`.
 
 ## Sending Drafts
 
