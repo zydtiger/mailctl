@@ -27,7 +27,10 @@ JSON.
   which sends the invitations from the calendar's own account
 
 It does not search full message bodies, save attachments, or attach files to
-outgoing mail. Forwards do not carry the original attachments.
+outgoing mail. Forwards do not carry the original attachments. Mail wraps
+every body set through its scripting interface in a quote styled to look
+like ordinary text, so the plain-text part of a sent message has each line
+prefixed with `> `.
 
 ## Requirements
 

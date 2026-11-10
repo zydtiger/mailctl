@@ -118,11 +118,24 @@ message, and an XML property list.
   - Mail autosaves an invisible compose that was neither saved nor sent,
     including a refused one, to Drafts within seconds, with or without its
     recipients.
-  - A sent reply or forward wraps the whole content mailctl set, body
-    included, in a `blockquote type="cite"` styled without a quote bar,
-    after an empty top `div`. The HTML part reads as unquoted text, but the
-    `text/plain` part prefixes every line with `> `. The saved draft has no
-    such wrapper. Replies sent with mailctl 0.3.0 have the same structure.
+  - Mail puts every scripted body, from `make`, `reply`, or `forward`,
+    into a share template: an empty `Apple-Mail-URLShareUserContentTopClass`
+    `div`, then the content inside a `blockquote type="cite"` styled without
+    a quote bar. Saved drafts carry it too. The HTML part reads as unquoted
+    text, but the sent `text/plain` part prefixes every line with `> `.
+    Assigning `content` after creation and making a `paragraph` give the
+    same result; making a paragraph at `paragraphs.end` fails with "Invalid
+    key form". This matches Apple feedback FB11734014, reported since
+    Ventura, and mails sent with mailctl 0.3.0 have it as well.
+  - A reply opened with `openingWindow: true` gets Mail's native body
+    instead: a top line break and the quoted original in
+    `AppleOriginalContents`, with Mail's attribution. Setting
+    `AXSelectedText` on its focused `AXWebArea` is accepted but changes
+    nothing, since the web area exposes no selected text range. Putting the
+    text on the pasteboard and pressing Edit > Paste inserts it at the top,
+    outside any quote. `content` of such a window compose reads as empty.
+    mailctl does not use this path, which would need Accessibility, a
+    visible window, and the user's pasteboard for every compose.
 - Every draft save, including Mail's autosaves, stores a new message with a
   new Message-ID, and the sent copy gets another. `send` therefore confirms by
   subject and To and Cc addresses among Sent messages that were not there
