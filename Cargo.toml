@@ -1,6 +1,6 @@
 [package]
 name = "mailctl"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "A macOS Apple Mail CLI that reads the local Mail store and acts through Mail.app scripting"
 license = "MIT"
