@@ -46,7 +46,7 @@ prefixed with `> `.
 Install a tagged release with Cargo:
 
 ```sh
-cargo install --locked --git https://github.com/zydtiger/mailctl --tag v0.3.1
+cargo install --locked --git https://github.com/zydtiger/mailctl --tag v0.3.2
 ```
 
 Or, from a checkout:
