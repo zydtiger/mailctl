@@ -264,6 +264,97 @@ Outlook 16.113 on macOS 26.6, English UI:
   state: without `--send`, the bridge leaves the filled-in editor open, which
   Outlook does not save anywhere.
 
+## Outlook Compose Spike
+
+Issue #11 asked whether `draft`, `reply`, and `forward` could compose in the
+new Outlook through the Accessibility API while reads stay on Mail's store.
+A spike on 2026-11-10 tried it with throwaway JXA scripts built on `ax.js`,
+against Outlook 16.113.3 with the English UI on macOS 26.6 and the Exchange
+account, all messages self-addressed. No mailctl code drives this path yet.
+
+Composing works and gives a clean body:
+
+- File > New > Mail opens a window titled `Untitled • <account>` in 2 to
+  3 seconds; the title follows the subject. Its fields carry stable
+  `AXIdentifier`s: `accountPicker` (value `Name (address)`), `toTextField`,
+  `ccShowButton`, `subjectTextField`. The body is the `AXTextArea` inside the
+  web area of the group described `Editor`.
+- To takes the token method the meeting bridge uses (`AXSelectedText`,
+  Escape, Tab). Tokens read back as `AXStaticText` such as
+  `Tiger Ding, zding27@jh.edu, Away`, with the presence status appended.
+  Subject takes a written `AXValue`.
+- In the body, `AXSelectedText` reports success and changes nothing, with or
+  without setting `AXSelectedTextRange` first, as in Mail. Writing `AXValue`
+  reaches Outlook's model in an empty body, newlines included, but would
+  replace the quoted original in a reply. Unicode key events
+  (`CGEventKeyboardSetUnicodeString`, bound through `ObjC.bindFunction`
+  with a `void *` string argument, posted with `CGEventPostToPid`) type at
+  the caret, which is at the top of a new reply or forward, above Outlook's
+  quote, without Outlook in front and without the pasteboard. Return keys
+  make the line breaks.
+- File > Save, with Outlook in front, saves to the account's Drafts;
+  `Draft saved just now` appears in the compose.
+- The sent new message, reply, and forward each had the typed text unquoted
+  in both parts: no `blockquote type="cite"` and no `> ` lines. Outlook
+  quotes the original below a `From:`/`Date:`/`To:`/`Subject:` block inside
+  `div#mail-editor-reference-message-container`. Reply subjects get `Re:`,
+  forwards `FW:`. Both carry `In-Reply-To` and `References` with the
+  original's Message-ID. The sent copy keeps the draft's Message-ID.
+
+Replying to a given message:
+
+- Outlook shows no Message-ID anywhere found. The reading pane's
+  `HeaderMainContainer` gives the subject, `From:` with address, `Sent on:`
+  to the minute, and recipients; result rows give sender, subject,
+  minute-resolution time, folder, unread state, and a body preview.
+- Search covers the selected folder (`searchScopeButton` reads
+  `Current Folder`; its pop-up does not open through AX). Selecting the
+  folder's row in the navigation `AXOutline` and then writing the
+  `AXSearchField` value and pressing the `Perform Search` button searches;
+  Return posted to the process does not. Matching is fuzzy, so a search for
+  one subject lists similar subjects too. Results come back in about six
+  seconds.
+- Rows are grouped by conversation (`13 messages, …`). Selecting the row and
+  posting Right Arrow expands it into one row per message. In the test
+  thread two replies shared sender, subject, and minute and differed only in
+  preview, and Mail's Inbox and Sent copies of one message are two rows with
+  identical fields. Matching a store record therefore rests on folder,
+  sender, subject, minute, and preview text; a tie has to be refused, and
+  any copy of the same message is an acceptable target.
+- The header's `Reply`, `Reply all`, and `Forward` buttons act only with
+  Outlook in front and open an inline compose in the reading pane within
+  about 2.5 seconds, with the same identifiers as the window plus
+  `fullMessageComposeButton`. Opening a message that is itself a draft shows
+  the inline editor instead of the header.
+- The menu bar follows the key window: with a compose key, `Message` is
+  replaced by `Draft`, so the bridge uses the header buttons rather than
+  Message > Reply.
+
+What failed or stays open:
+
+- Read-back from Mail's store is unreliable for Outlook drafts. Mail showed
+  no Exchange draft for over nine minutes after Outlook saved the new
+  message, then showed it. The reply and forward drafts appeared within
+  about two minutes but with the body of Outlook's first autosave, made when
+  the compose opened, and Mail did not update them in the next five minutes
+  although Outlook's Drafts preview showed the typed text. Exchange updates a
+  draft in place under the same Message-ID. `check for new mail` and
+  `synchronize` did not speed this up. Sent copies are new items and did
+  appear in Mail's Sent Items, and Mail dropped the drafts after the send.
+  A pre-send check has to read Outlook's own editor, not the store.
+- Send needs Outlook in front. The forward was read back through AX with the
+  expected body, then sent with the text `Hat ` in front of it; Outlook's
+  Drafts preview just before had not shown it. The likeliest source is
+  typing in another app, which Outlook received while it was frontmost for
+  the press. Rechecking the body after activation narrows this window but
+  cannot close it.
+- New messages start from Outlook's default account, whatever folder is
+  selected. `accountPicker` exposes no actions, and focusing it and pressing
+  Space opens nothing, so the sending account could not be chosen. Replies
+  and forwards use the account holding the original.
+- Discard asks `Discard draft message?` in a sheet and moves the last saved
+  draft to Deleted Items.
+
 ## Permissions
 
 `src/responsibility.rs` re-executes mailctl through `posix_spawn` with
